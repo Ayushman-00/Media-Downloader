@@ -5,7 +5,6 @@ from pathlib import Path
 from core.utils import get_default_download_folder
 from core.paths import user_data_path
 
-# Default configuration
 DEFAULT_CONFIG = {
     "general": {
         "download_folder": get_default_download_folder(),
@@ -39,12 +38,12 @@ DEFAULT_CONFIG = {
 
 class ConfigManager:
     def __init__(self, config_file="settings.json"):
-        # Always store settings next to the executable (PyInstaller-safe)
+    
         self.config_file = user_data_path(config_file)
         self.config = self.load_config()
 
     def load_config(self):
-        """Load config from JSON, falling back to defaults if missing or invalid."""
+      
         if not self.config_file.exists():
             self.save_config(DEFAULT_CONFIG)
             return DEFAULT_CONFIG.copy()
@@ -53,7 +52,6 @@ class ConfigManager:
             with open(self.config_file, "r", encoding="utf-8") as f:
                 user_config = json.load(f)
                 
-            # Merge user config with defaults to ensure all keys exist
             merged_config = DEFAULT_CONFIG.copy()
             for section, values in user_config.items():
                 if section in merged_config:
@@ -66,7 +64,7 @@ class ConfigManager:
             return DEFAULT_CONFIG.copy()
 
     def save_config(self, config_data=None):
-        """Save the current configuration to JSON."""
+       
         if config_data is None:
             config_data = self.config
         try:
@@ -76,7 +74,7 @@ class ConfigManager:
             print(f"Error saving config: {e}")
 
     def get(self, section, key=None):
-        """Get a configuration section or specific key."""
+     
         if section not in self.config:
             return None
         if key is None:
@@ -84,11 +82,10 @@ class ConfigManager:
         return self.config[section].get(key)
 
     def set(self, section, key, value):
-        """Set a configuration value and save."""
+      
         if section not in self.config:
             self.config[section] = {}
         self.config[section][key] = value
         self.save_config()
 
-# Global config instance
 config = ConfigManager()
