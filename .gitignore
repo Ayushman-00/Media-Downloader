@@ -1,1 +1,20 @@
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# App-generated data (user-specific, not for repo)
+settings.json
+history.json
+logs/
+
+# PyInstaller output
+build/
+dist/
+*.spec
+
+# Misc
+get-pip.py
+.env
+*.egg-info/
