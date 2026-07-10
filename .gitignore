@@ -4,7 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 
-# App-generated data (user-specific, not for repo)
+
 settings.json
 history.json
 logs/
