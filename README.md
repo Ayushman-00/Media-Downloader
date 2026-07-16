@@ -152,7 +152,7 @@ python main.py
 
 <div align="center">
 
-**Built with Python · CustomTkinter · yt-dlp**
+**Built with Python 
 
 [⭐ Star this repo](https://github.com/Ayushman-00/Media-Downloader) if you find it useful!
 
