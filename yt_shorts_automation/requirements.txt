@@ -1,0 +1,12 @@
+# yt_shorts_automation dependencies
+# -----------------------------------
+# Core (needed now)
+pyyaml>=6.0
+faster-whisper>=1.0.0
+
+# Future modules (uncomment when building them)
+# librosa>=0.10.0           # music_selector
+# pyscenedetect>=0.6        # highlight_finder
+# edge-tts>=6.1             # captioner
+# google-api-python-client  # uploader
+# google-auth-oauthlib      # uploader

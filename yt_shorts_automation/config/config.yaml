@@ -1,0 +1,86 @@
+# yt_shorts_automation configuration
+# ------------------------------------
+
+paths:
+  downloads: downloads
+  clips: output/clips
+  final: output/final
+  logs: output/logs
+  music: music
+  credentials: credentials
+
+# ------------------------------------
+# Downloader settings
+# ------------------------------------
+downloader:
+  format: "bestvideo[height<=1080]+bestaudio/best"
+  use_external_exe: false
+  external_exe_path: ""
+
+# ------------------------------------
+# Transcript settings
+# ------------------------------------
+transcript:
+  # Try to use captions already downloaded by yt-dlp before running Whisper
+  prefer_youtube_captions: true
+  # Fall back to local Whisper if no captions found
+  whisper_fallback: true
+  # faster-whisper model: tiny, base, small, medium, large-v2, large-v3
+  whisper_model: base
+  # auto = try CUDA first, fall back to CPU
+  whisper_device: auto
+  # Voice Activity Detection (filters silence/music). Disabled by default
+  # because it can be too aggressive on mixed speech+music content.
+  vad_filter: false
+  vad_parameters:
+    threshold: 0.5
+    min_speech_duration_ms: 250
+    max_speech_duration_s: .inf
+    min_silence_duration_ms: 2000
+    speech_pad_ms: 400
+
+# ------------------------------------
+# Highlight detection settings (next module)
+# ------------------------------------
+highlight:
+  window_sec: 45
+  step_sec: 5
+  method: heuristic   # heuristic | llm | hybrid
+  top_candidates: 5
+  use_ollama: false
+  ollama_url: "http://localhost:11434"
+  ollama_model: "llama3"
+
+# ------------------------------------
+# Video settings
+# ------------------------------------
+video:
+  target_width: 1080
+  target_height: 1920
+  fps: 30
+
+# ------------------------------------
+# Music settings (future module)
+# ------------------------------------
+music:
+  default_volume: 0.15
+  duck_original: true
+
+# ------------------------------------
+# Caption settings (future module)
+# ------------------------------------
+captions:
+  enabled: true
+  font: "Arial"
+  font_size: 48
+  primary_color: "&H00FFFFFF"
+  outline_color: "&H00000000"
+  outline_width: 3
+  position: "bottom"
+
+# ------------------------------------
+# Upload settings (future module)
+# ------------------------------------
+upload:
+  category_id: "22"
+  made_for_kids: false

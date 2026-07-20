@@ -1,0 +1,6 @@
+{
+  "_comment": "Rename this to music_library.json and edit to match your actual files. Used only when a job sets music_file to 'auto' and provides a mood_tag.",
+  "upbeat_lofi.mp3": ["chill", "upbeat", "vlog"],
+  "dramatic_build.mp3": ["dramatic", "cinematic", "reveal"],
+  "funny_bounce.mp3": ["comedy", "funny", "upbeat"]
+}
