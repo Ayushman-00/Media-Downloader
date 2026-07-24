@@ -10,6 +10,7 @@ import os
 import sys
 import subprocess
 import threading
+import tkinter.filedialog as filedialog
 from typing import Optional, List, Dict
 
 # ── Bootstrap yt_shorts_automation imports ──────────────────────────────────
@@ -71,9 +72,9 @@ class ShortsTab(ctk.CTkFrame):
         row += 1
 
         # ══════════════════════════════════════════════════════════════════
-        # STEP 1 — Download
+        # STEP 1 — Download or Select
         # ══════════════════════════════════════════════════════════════════
-        row = self._section_header("Step 1 — Download Video", row)
+        row = self._section_header("Step 1 — Download or Select Video", row)
 
         ctk.CTkLabel(self.scroll, text="YouTube URL:").grid(
             row=row, column=0, padx=10, pady=5, sticky="w"
@@ -101,6 +102,19 @@ class ShortsTab(ctk.CTkFrame):
         )
         self.dl_btn.grid(
             row=row, column=0, columnspan=2, padx=10, pady=5, sticky="ew"
+        )
+        row += 1
+
+        ctk.CTkLabel(self.scroll, text="— OR —", font=("Arial", 11, "bold")).grid(
+            row=row, column=0, columnspan=2, pady=(10, 0)
+        )
+        row += 1
+
+        self.browse_btn = ctk.CTkButton(
+            self.scroll, text="📂  Browse Local Video", height=38, fg_color="#455A64", hover_color="#37474F", command=self._on_browse_local
+        )
+        self.browse_btn.grid(
+            row=row, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="ew"
         )
         row += 1
 
@@ -399,6 +413,27 @@ class ShortsTab(ctk.CTkFrame):
             self.after(0, lambda: self.dl_btn.configure(state="normal"))
 
         self._run_threaded(work, self.dl_status, "⬇ Downloading…", self.dl_btn)
+
+    def _on_browse_local(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Video",
+            filetypes=[("Video Files", "*.mp4 *.mkv *.webm *.mov *.avi"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        self._video_path = file_path
+        self._video_url = ""  # No URL
+        self._info = {"title": os.path.basename(file_path)}
+        self._segments = None
+        self._highlight = None
+        self._final_path = None
+
+        self._set_status(
+            self.dl_status, f"✅ Local file selected: {os.path.basename(file_path)}", "#4CAF50"
+        )
+        self.analyze_btn.configure(state="normal")
+        self.url_entry.delete(0, "end")
 
     # ══════════════════════════════════════════════════════════════════════
     # Step 2 — Analyze (transcript + highlight)
