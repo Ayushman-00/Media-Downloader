@@ -317,49 +317,63 @@ def transcribe_with_groq(media_path: str, language: Optional[str] = None) -> Opt
         print("[transcript] GROQ_API_KEY not set in .env", flush=True)
         return None
 
-    model = _cfg().get("groq", {}).get("whisper_model", "whisper-large-v3")
+    model = _cfg().get("groq", {}).get("whisper_model", "whisper-large-v3-turbo")
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
     
-    # We must use multipart/form-data for the file upload
-    import io
-    import mimetypes
-    import uuid
+    import subprocess
+    audio_path = os.path.splitext(media_path)[0] + "_temp_audio.mp3"
     
-    boundary = uuid.uuid4().hex
-    
-    def form_field(name, value):
-        return f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode('utf-8')
-    
-    filename = os.path.basename(media_path)
-    mime_type, _ = mimetypes.guess_type(filename)
-    mime_type = mime_type or 'application/octet-stream'
-    
-    with open(media_path, "rb") as f:
-        file_data = f.read()
-        
-    file_header = f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n".encode('utf-8')
-    
-    body = bytearray()
-    body.extend(form_field("model", model))
-    body.extend(form_field("response_format", "verbose_json"))
-    if language:
-        body.extend(form_field("language", language))
-    body.extend(file_header)
-    body.extend(file_data)
-    body.extend(f"\r\n--{boundary}--\r\n".encode('utf-8'))
-    
-    req = urllib.request.Request(
-        url,
-        data=bytes(body),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}"
-        },
-        method="POST"
-    )
-    
-    print(f"[transcript] transcribing with Groq ({model})...", flush=True)
     try:
+        # Extract audio using FFmpeg to avoid 25MB limit and format rejection
+        print(f"[transcript] extracting audio for Groq API...", flush=True)
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", media_path, "-vn", "-acodec", "libmp3lame", "-q:a", "5", audio_path],
+                check=True,
+                capture_output=True
+            )
+        except Exception as e:
+            print(f"[transcript] Audio extraction failed: {e}", flush=True)
+            return None
+
+        # We must use multipart/form-data for the file upload
+        import io
+        import mimetypes
+        import uuid
+        
+        boundary = uuid.uuid4().hex
+        
+        def form_field(name, value):
+            return f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode('utf-8')
+        
+        filename = os.path.basename(audio_path)
+        mime_type = 'audio/mpeg'
+        
+        with open(audio_path, "rb") as f:
+            file_data = f.read()
+            
+        file_header = f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n".encode('utf-8')
+        
+        body = bytearray()
+        body.extend(form_field("model", model))
+        body.extend(form_field("response_format", "verbose_json"))
+        if language:
+            body.extend(form_field("language", language))
+        body.extend(file_header)
+        body.extend(file_data)
+        body.extend(f"\r\n--{boundary}--\r\n".encode('utf-8'))
+        
+        req = urllib.request.Request(
+            url,
+            data=bytes(body),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}"
+            },
+            method="POST"
+        )
+        
+        print(f"[transcript] transcribing with Groq ({model})...", flush=True)
         with urllib.request.urlopen(req, timeout=120) as response:
             result = json.loads(response.read().decode('utf-8'))
             
@@ -375,6 +389,9 @@ def transcribe_with_groq(media_path: str, language: Optional[str] = None) -> Opt
     except Exception as e:
         print(f"[transcript] Groq transcription failed: {e}", flush=True)
         return None
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
 
 
 # ---------------------------------------------------------------------------
