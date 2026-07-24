@@ -58,13 +58,7 @@ class App(ctk.CTk):
             btn.grid(row=i, column=0, padx=15, pady=6, sticky="ew")
             self._nav_buttons[tab_name] = btn
 
-        self.ver_label = ctk.CTkLabel(
-            self.sidebar_frame,
-            text="Powered by yt-dlp",
-            font=("Arial", 10),
-            text_color="gray",
-        )
-        self.ver_label.grid(row=8, column=0, padx=10, pady=(0, 15))
+
 
         # ── Content area ───────────────────────────────────────────────────
         self.main_container = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")

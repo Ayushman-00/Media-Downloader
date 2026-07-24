@@ -110,14 +110,24 @@ def fetch_youtube_captions(video_url: str) -> Optional[List[Dict]]:
 
     try:
         print(f"[transcript] fetching captions via API for {video_id}...", flush=True)
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        
+        # Try both the new API (v1.x) and the old API
+        api_instance = YouTubeTranscriptApi()
+        if hasattr(api_instance, "fetch"):
+            transcript_obj = api_instance.fetch(video_id)
+            items = getattr(transcript_obj, 'snippets', transcript_obj)
+        else:
+            items = YouTubeTranscriptApi.get_transcript(video_id)
+            
         segments = []
-        for item in transcript:
+        for item in items:
+            start = getattr(item, 'start', item.get("start") if isinstance(item, dict) else 0)
+            duration = getattr(item, 'duration', item.get("duration") if isinstance(item, dict) else 0)
+            text = getattr(item, 'text', item.get("text") if isinstance(item, dict) else "")
+            
             segments.append({
-                "start": item["start"],
-                "end": item["start"] + item["duration"],
-                "text": item["text"]
+                "start": start,
+                "end": start + duration,
+                "text": text
             })
         print(f"[transcript] successfully fetched {len(segments)} segments via API", flush=True)
         return segments
