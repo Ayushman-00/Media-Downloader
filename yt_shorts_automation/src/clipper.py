@@ -8,9 +8,6 @@ Two approaches:
 
   2. crop_clip_with_face_tracking() — cuts first, then uses OpenCV Haar
      cascade to track the largest face and slide the crop window to follow it.
-     Adapted from:
-       https://github.com/SamurAIGPT/AI-Youtube-Shorts-Generator
-       File: shorts_generator/local/clipper.py
 
 Both produce a vertical .mp4 ready for music overlay / captioning.
 """
@@ -66,7 +63,7 @@ def ffmpeg_center_crop_cmd(
 
 
 # ---------------------------------------------------------------------------
-# Face-tracking vertical crop  (adapted from SamurAIGPT local/clipper.py)
+# Face-tracking vertical crop
 # ---------------------------------------------------------------------------
 
 def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> str:
@@ -98,8 +95,6 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str = "9:16") -
 
     Uses OpenCV Haar cascade to find the largest face per frame and smoothly
     slide the crop window to keep it centered.
-
-    Adapted from SamurAIGPT/AI-Youtube-Shorts-Generator (local/clipper.py).
     """
     try:
         import cv2

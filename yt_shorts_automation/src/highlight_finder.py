@@ -5,9 +5,7 @@ Provides three detection strategies:
   1. Heuristic — sliding-window scoring based on audio energy + transcript
      density. Pure local, no LLM needed. (custom — no direct repo equivalent)
   2. LLM (Ollama) — sends top heuristic candidates to a local Ollama model
-     for re-ranking by virality potential. Prompt design adapted from:
-       https://github.com/SamurAIGPT/AI-Youtube-Shorts-Generator
-       File: shorts_generator/highlights.py
+     for re-ranking by virality potential.
   3. Hybrid — heuristic first, then LLM re-rank on the shortlist.
 
 The dashboard calls:
@@ -180,7 +178,7 @@ def score_heuristic(
 
 
 # ---------------------------------------------------------------------------
-# LLM scoring via Ollama  (prompt adapted from SamurAIGPT highlights.py)
+# LLM scoring via Ollama
 # ---------------------------------------------------------------------------
 
 VIRALITY_PROMPT = """You are an expert short-form video editor. Given these candidate
@@ -313,7 +311,8 @@ def score_groq(
         data=payload,
         headers={
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         },
         method="POST"
     )

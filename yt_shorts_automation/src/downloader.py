@@ -5,9 +5,7 @@ Two public functions (called by dashboard.py and pipeline.py):
   download_via_ytdlp(url, output_dir, fmt)       → (video_path, info_dict)
   download_via_exe(url, output_dir, exe_path)     → (video_path, info_dict)
 
-Adapted from:
-  SamurAIGPT/AI-Youtube-Shorts-Generator  shorts_generator/downloader.py
-  + custom external-exe bridge for the parent Media Downloader suite
+Includes custom external-exe bridge for the parent Media Downloader suite.
 """
 
 import glob

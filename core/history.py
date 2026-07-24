@@ -6,7 +6,7 @@ from core.paths import user_data_path
 
 class HistoryManager:
     def __init__(self, history_file="history.json"):
-       
+        # Always store history next to the executable (PyInstaller-safe)
         self.history_file = user_data_path(history_file)
         self.history = self.load_history()
 
@@ -40,7 +40,7 @@ class HistoryManager:
             "status": status,
             "file_size": file_size
         }
-        self.history.insert(0, entry)  
+        self.history.insert(0, entry)  # Add to beginning
         self.save_history()
         return entry["id"]
 
@@ -69,4 +69,5 @@ class HistoryManager:
         """Return all history entries."""
         return self.history
 
+# Global history instance
 history_db = HistoryManager()

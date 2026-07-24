@@ -1,14 +1,7 @@
 """
 Transcription module for yt_shorts_automation.
 
-Core faster-whisper logic adapted from:
-  https://github.com/SamurAIGPT/AI-Youtube-Shorts-Generator
-  File: shorts_generator/local/transcriber.py  (MIT-equivalent, no license declared)
 
-Added on top:
-  - find_existing_captions()  — checks if yt-dlp already saved a .vtt/.srt
-  - parse_vtt()               — WebVTT → segment list
-  - Config wired to config.yaml instead of .env
 """
 
 import glob
@@ -138,7 +131,7 @@ def fetch_youtube_captions(video_url: str) -> Optional[List[Dict]]:
 
 
 # ---------------------------------------------------------------------------
-# VTT parsing  (custom — SamurAIGPT only handles SRT)
+# VTT parsing
 # ---------------------------------------------------------------------------
 
 def parse_vtt(vtt_path: str) -> List[Dict]:
@@ -210,7 +203,7 @@ def _parse_vtt_timestamp(value: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# SRT helpers  (adapted from SamurAIGPT shorts_generator/local/transcriber.py)
+# SRT helpers
 # ---------------------------------------------------------------------------
 
 def _format_srt_timestamp(seconds: float) -> str:
@@ -233,7 +226,7 @@ def _parse_srt_timestamp(value: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# SRT cache  (adapted from SamurAIGPT shorts_generator/local/transcriber.py)
+# SRT cache
 # ---------------------------------------------------------------------------
 
 def _transcript_cache_path(media_path: str) -> Path:
@@ -287,7 +280,7 @@ def _load_srt_cache(cache_path: Path) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# Device detection  (adapted from SamurAIGPT shorts_generator/local/transcriber.py)
+# Device detection
 # ---------------------------------------------------------------------------
 
 def _resolve_device() -> str:
@@ -368,7 +361,8 @@ def transcribe_with_groq(media_path: str, language: Optional[str] = None) -> Opt
             data=bytes(body),
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "Content-Type": f"multipart/form-data; boundary={boundary}"
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
             },
             method="POST"
         )
@@ -386,6 +380,13 @@ def transcribe_with_groq(media_path: str, language: Optional[str] = None) -> Opt
                 })
             print(f"[transcript] Groq success: {len(segments)} segments", flush=True)
             return segments
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode('utf-8', errors='ignore')
+        except Exception:
+            err_body = ""
+        print(f"[transcript] Groq transcription failed ({e.code} {e.reason}): {err_body}", flush=True)
+        return None
     except Exception as e:
         print(f"[transcript] Groq transcription failed: {e}", flush=True)
         return None
@@ -395,7 +396,7 @@ def transcribe_with_groq(media_path: str, language: Optional[str] = None) -> Opt
 
 
 # ---------------------------------------------------------------------------
-# Main transcription  (adapted from SamurAIGPT shorts_generator/local/transcriber.py)
+# Main transcription
 # ---------------------------------------------------------------------------
 
 def transcribe_with_whisper(

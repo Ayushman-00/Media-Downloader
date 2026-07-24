@@ -94,5 +94,5 @@ upload:
 # Groq Cloud API settings
 # ------------------------------------
 groq:
-  whisper_model: distil-whisper-large-v3-en
+  whisper_model: whisper-large-v3-turbo
   llm_model: llama-3.3-70b-versatile

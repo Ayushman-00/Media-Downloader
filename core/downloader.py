@@ -4,7 +4,7 @@ import traceback
 from core.config import config
 from core.history import history_db
 
-
+# Map display quality labels to max-height values for yt-dlp format strings
 QUALITY_MAP = {
     "Best Available": None,
     "4K": "2160",
@@ -15,6 +15,7 @@ QUALITY_MAP = {
     "360p": "360",
 }
 
+# Map display browser names to yt-dlp cookiesfrombrowser keys
 BROWSER_MAP = {
     "Chrome": "chrome",
     "Firefox": "firefox",
@@ -37,7 +38,7 @@ class DownloadTask:
         self.thread = None
         self.history_id = None
 
-   
+    # ------------------------------------------------------------------ hooks
     def _hook(self, d):
         """Called by yt-dlp from the download thread."""
         if self.is_cancelled:
@@ -46,14 +47,15 @@ class DownloadTask:
             try:
                 self.progress_callback(d)
             except Exception:
-                pass  
+                pass  # Never let UI errors kill the download thread
 
+    # ------------------------------------------------------------------ run
     def start(self):
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
     def _run(self):
-       
+        # Basic platform detection
         url_l = self.url.lower()
         if "youtube.com" in url_l or "youtu.be" in url_l:
             platform = "YouTube"
@@ -86,13 +88,13 @@ class DownloadTask:
         )
 
         try:
-            ydl_opts = dict(self.options)          
+            ydl_opts = dict(self.options)           # shallow copy
             ydl_opts["progress_hooks"] = [self._hook]
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(self.url, download=True)
 
-          
+            # info may be a playlist wrapper; unwrap if needed
             if info and "entries" in info:
                 info = info["entries"][0] if info["entries"] else info
 
@@ -141,7 +143,7 @@ class Downloader:
         naming_template: str,
         output_folder: str,
     ) -> dict:
-       
+        # Use forward-slash paths so yt-dlp handles them cross-platform
         outtmpl = output_folder.replace("\\", "/").rstrip("/") + "/" + naming_template
 
         opts: dict = {
@@ -157,14 +159,14 @@ class Downloader:
             ),
         }
 
-      
+        # ---- Cookies -------------------------------------------------------
         if cookies_mode in BROWSER_MAP:
-         
+            # yt-dlp expects (browser_name,) or (browser_name, profile, keyring, container)
             opts["cookiesfrombrowser"] = (BROWSER_MAP[cookies_mode],)
         elif cookies_mode == "File" and cookies_file:
             opts["cookiefile"] = cookies_file
 
-       
+        # ---- Format / Quality ----------------------------------------------
         res = QUALITY_MAP.get(quality)  # None means "Best Available"
 
         if mode == "Best Video + Best Audio":
@@ -224,7 +226,7 @@ class Downloader:
             error_callback=error_cb,
         )
         self.active_tasks.append(task)
-       
+        # NOTE: start() is called by the caller AFTER setting callbacks
         return task
 
     def cancel_all(self):
