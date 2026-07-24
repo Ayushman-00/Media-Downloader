@@ -14,6 +14,9 @@ Added on top:
 import glob
 import os
 import re
+import urllib.request
+import urllib.error
+import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -86,6 +89,42 @@ def find_existing_captions(video_path: str) -> Optional[str]:
             return plain
 
     return None
+
+
+def fetch_youtube_captions(video_url: str) -> Optional[List[Dict]]:
+    """Fetch captions directly from YouTube using youtube-transcript-api.
+    Fast and free, requires no API key.
+    """
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+    except ImportError:
+        print("[transcript] youtube-transcript-api not installed", flush=True)
+        return None
+
+    # Extract video ID
+    match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", video_url)
+    if not match:
+        print(f"[transcript] Could not extract video ID from {video_url}", flush=True)
+        return None
+    video_id = match.group(1)
+
+    try:
+        print(f"[transcript] fetching captions via API for {video_id}...", flush=True)
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        
+        segments = []
+        for item in transcript:
+            segments.append({
+                "start": item["start"],
+                "end": item["start"] + item["duration"],
+                "text": item["text"]
+            })
+        print(f"[transcript] successfully fetched {len(segments)} segments via API", flush=True)
+        return segments
+    except Exception as e:
+        print(f"[transcript] API fetch failed: {e}", flush=True)
+        return None
+
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +294,77 @@ def _resolve_device() -> str:
     except (ImportError, OSError, RuntimeError):
         pass
     return "cpu"
+
+
+# ---------------------------------------------------------------------------
+# Groq Whisper API (custom — cloud fallback)
+# ---------------------------------------------------------------------------
+
+def transcribe_with_groq(media_path: str, language: Optional[str] = None) -> Optional[List[Dict]]:
+    """Transcribe using Groq's fast cloud Whisper endpoint."""
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        print("[transcript] GROQ_API_KEY not set in .env", flush=True)
+        return None
+
+    model = _cfg().get("groq", {}).get("whisper_model", "whisper-large-v3")
+    url = "https://api.groq.com/openai/v1/audio/transcriptions"
+    
+    # We must use multipart/form-data for the file upload
+    import io
+    import mimetypes
+    import uuid
+    
+    boundary = uuid.uuid4().hex
+    
+    def form_field(name, value):
+        return f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode('utf-8')
+    
+    filename = os.path.basename(media_path)
+    mime_type, _ = mimetypes.guess_type(filename)
+    mime_type = mime_type or 'application/octet-stream'
+    
+    with open(media_path, "rb") as f:
+        file_data = f.read()
+        
+    file_header = f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n".encode('utf-8')
+    
+    body = bytearray()
+    body.extend(form_field("model", model))
+    body.extend(form_field("response_format", "verbose_json"))
+    if language:
+        body.extend(form_field("language", language))
+    body.extend(file_header)
+    body.extend(file_data)
+    body.extend(f"\r\n--{boundary}--\r\n".encode('utf-8'))
+    
+    req = urllib.request.Request(
+        url,
+        data=bytes(body),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}"
+        },
+        method="POST"
+    )
+    
+    print(f"[transcript] transcribing with Groq ({model})...", flush=True)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            
+            segments = []
+            for item in result.get("segments", []):
+                segments.append({
+                    "start": item["start"],
+                    "end": item["end"],
+                    "text": item["text"].strip()
+                })
+            print(f"[transcript] Groq success: {len(segments)} segments", flush=True)
+            return segments
+    except Exception as e:
+        print(f"[transcript] Groq transcription failed: {e}", flush=True)
+        return None
 
 
 # ---------------------------------------------------------------------------

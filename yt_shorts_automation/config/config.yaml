@@ -23,7 +23,11 @@ downloader:
 transcript:
   # Try to use captions already downloaded by yt-dlp before running Whisper
   prefer_youtube_captions: true
-  # Fall back to local Whisper if no captions found
+  # Fetch directly from YouTube's server (fast, free, no download needed)
+  use_youtube_transcript_api: true
+  # If local captions or youtube-transcript-api fail, try Groq Cloud Whisper
+  groq_whisper_fallback: true
+  # Fall back to local Whisper if no captions found and groq fails
   whisper_fallback: true
   # faster-whisper model: tiny, base, small, medium, large-v2, large-v3
   whisper_model: base
@@ -45,8 +49,9 @@ transcript:
 highlight:
   window_sec: 45
   step_sec: 5
-  method: heuristic   # heuristic | llm | hybrid
+  method: groq   # heuristic | groq | ollama | hybrid
   top_candidates: 5
+  use_groq: true
   use_ollama: false
   ollama_url: "http://localhost:11434"
   ollama_model: "llama3"
@@ -84,3 +89,10 @@ captions:
 upload:
   category_id: "22"
   made_for_kids: false
+
+# ------------------------------------
+# Groq Cloud API settings
+# ------------------------------------
+groq:
+  whisper_model: whisper-large-v3
+  llm_model: llama-3.3-70b-versatile

@@ -3,8 +3,10 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.venv/
+venv/
 
-
+# App-generated data
 settings.json
 history.json
 logs/
@@ -14,7 +16,23 @@ build/
 dist/
 *.spec
 
+# Environment variables & Credentials (NEVER COMMIT TO GIT)
+.env
+*.env
+credentials/client_secret.json
+credentials/token.json
+yt_shorts_automation/credentials/*.json
+!yt_shorts_automation/credentials/.gitkeep
+
+# Automation working directories & media
+yt_shorts_automation/downloads/
+yt_shorts_automation/output/
+yt_shorts_automation/Samur/
+yt_shorts_automation/venv/
+yt_shorts_automation/music/*
+!yt_shorts_automation/music/.gitkeep
+!yt_shorts_automation/music/*.example.json
+
 # Misc
 get-pip.py
-.env
 *.egg-info/

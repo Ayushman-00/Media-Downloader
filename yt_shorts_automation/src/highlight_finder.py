@@ -277,3 +277,58 @@ def score_llm(
 
     # Fallback: original order
     return list(range(len(shortlist)))
+
+
+def score_groq(
+    shortlist: List[Dict],
+    model: str = "llama-3.3-70b-versatile",
+) -> List[int]:
+    """Send the heuristic shortlist to Groq for viral re-ranking."""
+    import os
+    import urllib.request
+    import urllib.error
+
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        print("[highlight] GROQ_API_KEY not set in .env", flush=True)
+        return list(range(len(shortlist)))
+
+    # Build candidate descriptions
+    candidates = ""
+    for i, w in enumerate(shortlist):
+        preview = w.get("text", "")[:300]
+        candidates += f"\n[{i}] {w['start']:.1f}s–{w['end']:.1f}s: {preview}\n"
+
+    prompt = VIRALITY_PROMPT.format(candidates=candidates)
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    
+    payload = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        
+        raw_text = result["choices"][0]["message"]["content"]
+        indices = _parse_index_list(raw_text, max_idx=len(shortlist) - 1)
+        if indices:
+            print(f"[highlight] Groq re-ranked: {indices}", flush=True)
+            return indices
+    except (urllib.error.URLError, json.JSONDecodeError, ValueError, KeyError) as e:
+        print(f"[highlight] Groq call failed: {e}", flush=True)
+
+    # Fallback: original order
+    return list(range(len(shortlist)))

@@ -1,1 +1,12 @@
-{}
+{
+  "url": "https://www.youtube.com/watch?v=REPLACE_ME",
+  "title": "My Short #Shorts",
+  "description": "#Shorts",
+  "tags": ["shorts"],
+  "privacy": "private",
+  "publish_at": null,
+  "music_track": "",
+  "music_volume": 0.15,
+  "clip_start": null,
+  "clip_end": null
+}

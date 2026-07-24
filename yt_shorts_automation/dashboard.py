@@ -93,14 +93,29 @@ if st.session_state.video_path:
     if st.button("Analyze video"):
         with st.spinner("Getting transcript..."):
             tcfg = cfg["transcript"]
-            vtt = transcript_mod.find_existing_captions(st.session_state.video_path)
-            if tcfg.get("prefer_youtube_captions") and vtt:
-                segments = transcript_mod.parse_vtt(vtt)
-            elif tcfg.get("whisper_fallback"):
+            segments = []
+            
+            # 1. Try youtube-transcript-api (fast, free)
+            if tcfg.get("use_youtube_transcript_api") and not segments:
+                segments = transcript_mod.fetch_youtube_captions(url)
+                
+            # 2. Try yt-dlp downloaded VTT
+            if tcfg.get("prefer_youtube_captions") and not segments:
+                vtt = transcript_mod.find_existing_captions(st.session_state.video_path)
+                if vtt:
+                    segments = transcript_mod.parse_vtt(vtt)
+                    
+            # 3. Try Groq Whisper (cloud fallback)
+            if tcfg.get("groq_whisper_fallback") and not segments:
+                segments = transcript_mod.transcribe_with_groq(st.session_state.video_path)
+                
+            # 4. Try local Whisper
+            if tcfg.get("whisper_fallback") and not segments:
                 segments = transcript_mod.transcribe_with_whisper(
                     st.session_state.video_path, tcfg.get("whisper_model", "base")
                 )
-            else:
+                
+            if not segments:
                 segments = []
             st.session_state.segments = segments
 
@@ -115,11 +130,19 @@ if st.session_state.video_path:
             else:
                 ranked = highlight_finder.score_heuristic(st.session_state.video_path, windows)
                 best = {**ranked[0], "reason": "heuristic pick"}
-                if hcfg.get("use_ollama") and hcfg["method"] in ("llm", "hybrid"):
+                if hcfg.get("use_groq") and hcfg["method"] in ("groq", "hybrid"):
+                    try:
+                        shortlist = ranked[: hcfg["top_candidates"]]
+                        gcfg = cfg.get("groq", {})
+                        order = highlight_finder.score_groq(shortlist, gcfg.get("llm_model", "llama-3.3-70b-versatile"))
+                        best = {**shortlist[order[0]], "reason": "hybrid Groq LLM pick"}
+                    except Exception as e:
+                        st.warning(f"Groq scoring unavailable, used heuristic instead ({e})")
+                elif hcfg.get("use_ollama") and hcfg["method"] in ("ollama", "hybrid"):
                     try:
                         shortlist = ranked[: hcfg["top_candidates"]]
                         order = highlight_finder.score_llm(shortlist, hcfg["ollama_url"], hcfg["ollama_model"])
-                        best = {**shortlist[order[0]], "reason": "hybrid LLM pick"}
+                        best = {**shortlist[order[0]], "reason": "hybrid Ollama LLM pick"}
                     except Exception as e:
                         st.warning(f"Ollama scoring unavailable, used heuristic instead ({e})")
             st.session_state.highlight = best

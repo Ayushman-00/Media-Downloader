@@ -2,11 +2,13 @@ import json
 import os
 import yaml
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_config():
+    load_dotenv(os.path.join(ROOT, ".env"))
     with open(os.path.join(ROOT, "config", "config.yaml"), "r") as f:
         cfg = yaml.safe_load(f)
     for key, rel in cfg["paths"].items():
