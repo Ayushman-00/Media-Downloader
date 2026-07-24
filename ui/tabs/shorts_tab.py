@@ -643,17 +643,40 @@ class ShortsTab(ctk.CTkFrame):
                     self._segments, clip_start, clip_end, ass_path, ccfg
                 )
                 final_out = os.path.join(final_dir, f"{base}_final.mp4")
-                ass_esc = ass_path.replace("\\", "/").replace(":", "\\:")
+                # Use relative path and escape single quotes for FFmpeg filter on Windows
+                rel_ass = os.path.relpath(ass_path).replace("\\", "/")
+                rel_ass_esc = rel_ass.replace("'", "'\\''")
                 sub_cmd = [
                     "ffmpeg", "-y", "-i", current,
-                    "-vf", f"subtitles='{ass_esc}'",
+                    "-vf", f"subtitles='{rel_ass_esc}'",
                     "-c:a", "copy",
                     final_out,
                 ]
                 subprocess.run(sub_cmd, check=True, capture_output=True)
                 current = final_out
 
+            # Ensure final video is in the final_dir
+            if not current.startswith(final_dir):
+                import shutil
+                final_out = os.path.join(final_dir, f"{base}_final.mp4")
+                shutil.move(current, final_out)
+                current = final_out
+
             self._final_path = current
+
+            # 4. Clean up intermediate files
+            cleanup_files = []
+            if 'clip_out' in locals(): cleanup_files.append(clip_out)
+            if 'music_out' in locals(): cleanup_files.append(music_out)
+            if 'ass_path' in locals(): cleanup_files.append(ass_path)
+            cleanup_files.append(os.path.join(clips_dir, f"{base}.srt"))
+
+            for fpath in cleanup_files:
+                if fpath and os.path.exists(fpath) and fpath != current:
+                    try:
+                        os.remove(fpath)
+                    except Exception:
+                        pass
 
             self.after(
                 0,
