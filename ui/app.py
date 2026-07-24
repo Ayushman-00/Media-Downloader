@@ -4,6 +4,7 @@ from ui.tabs.dashboard import DashboardTab
 from ui.tabs.queue import QueueTab
 from ui.tabs.history_tab import HistoryTab
 from ui.tabs.settings_tab import SettingsTab
+from ui.tabs.shorts_tab import ShortsTab
 
 
 class App(ctk.CTk):
@@ -30,7 +31,7 @@ class App(ctk.CTk):
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         self.sidebar_frame.grid_propagate(False)
         self.sidebar_frame.grid_columnconfigure(0, weight=1)
-        self.sidebar_frame.grid_rowconfigure(6, weight=1)
+        self.sidebar_frame.grid_rowconfigure(7, weight=1)
 
         self.logo_label = ctk.CTkLabel(
             self.sidebar_frame,
@@ -44,6 +45,7 @@ class App(ctk.CTk):
             ("  Queue",     "queue"),
             ("  History",   "history"),
             ("  Settings",  "settings"),
+            ("  Shorts",    "shorts"),
         ]
         self._nav_buttons: dict[str, ctk.CTkButton] = {}
         for i, (label, tab_name) in enumerate(nav_items, start=1):
@@ -62,7 +64,7 @@ class App(ctk.CTk):
             font=("Arial", 10),
             text_color="gray",
         )
-        self.ver_label.grid(row=7, column=0, padx=10, pady=(0, 15))
+        self.ver_label.grid(row=8, column=0, padx=10, pady=(0, 15))
 
         # ── Content area ───────────────────────────────────────────────────
         self.main_container = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -75,12 +77,14 @@ class App(ctk.CTk):
         self.history_tab   = HistoryTab(self.main_container)
         self.settings_tab  = SettingsTab(self.main_container)
         self.dashboard_tab = DashboardTab(self.main_container, self)
+        self.shorts_tab    = ShortsTab(self.main_container, self)
 
         self.tabs: dict[str, ctk.CTkFrame] = {
             "dashboard": self.dashboard_tab,
             "queue":     self.queue_tab,
             "history":   self.history_tab,
             "settings":  self.settings_tab,
+            "shorts":    self.shorts_tab,
         }
 
         for tab in self.tabs.values():
