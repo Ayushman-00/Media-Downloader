@@ -283,11 +283,28 @@ def _load_srt_cache(cache_path: Path) -> Dict:
 # Device detection
 # ---------------------------------------------------------------------------
 
+def _fix_windows_dll_paths():
+    """Fix WinError 1114 (c10.dll) on Windows by adding PyTorch's lib dir
+    to the DLL search path. Must be called before importing torch."""
+    if os.name != 'nt':
+        return
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec('torch')
+        if spec and spec.origin:
+            torch_lib = os.path.join(os.path.dirname(spec.origin), 'lib')
+            if os.path.isdir(torch_lib) and hasattr(os, 'add_dll_directory'):
+                os.add_dll_directory(torch_lib)
+    except Exception:
+        pass
+
+
 def _resolve_device() -> str:
     """Auto-detect CUDA availability, fall back to CPU."""
     device = _whisper_device()
     if device != "auto":
         return device
+    _fix_windows_dll_paths()
     try:
         import torch
         if torch.cuda.is_available():
@@ -432,12 +449,16 @@ def transcribe_with_whisper(
                 cache_path.unlink(missing_ok=True)
 
     # --- Load faster-whisper ---
+    _fix_windows_dll_paths()
     try:
         from faster_whisper import WhisperModel
-    except ImportError as e:
+    except (ImportError, OSError) as e:
         raise RuntimeError(
-            "faster-whisper is required for transcription. Install with:\n"
-            "    pip install faster-whisper"
+            "faster-whisper failed to load. This is often caused by a missing "
+            "Visual C++ Redistributable or a broken PyTorch/CUDA installation.\n"
+            "  - Install VC++ Redist: https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+            "  - Or reinstall PyTorch: pip install torch --force-reinstall\n"
+            f"  - Original error: {e}"
         ) from e
 
     device = _resolve_device()

@@ -46,7 +46,9 @@ class ShortsTab(ctk.CTkFrame):
         self._info: dict = {}
         self._segments: Optional[List[Dict]] = None
         self._highlight: Optional[Dict] = None
+        self._highlights: List[Dict] = []    # top-ranked highlights for multi-clip
         self._final_path: Optional[str] = None
+        self._final_paths: List[str] = []    # all built clip paths
 
         try:
             self._cfg = load_shorts_config()
@@ -231,6 +233,22 @@ class ShortsTab(ctk.CTkFrame):
         # STEP 5 — Build
         # ══════════════════════════════════════════════════════════════════
         row = self._section_header("Step 5 — Build Short", row)
+
+        clips_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        clips_frame.grid(
+            row=row, column=0, columnspan=2, padx=10, pady=5, sticky="ew"
+        )
+        ctk.CTkLabel(clips_frame, text="Number of Clips:").grid(
+            row=0, column=0, padx=(0, 10), sticky="w"
+        )
+        self.num_clips_var = ctk.StringVar(value="1")
+        ctk.CTkOptionMenu(
+            clips_frame,
+            variable=self.num_clips_var,
+            values=["1", "2", "3", "4", "5"],
+            width=70,
+        ).grid(row=0, column=1, sticky="w")
+        row += 1
 
         self.build_btn = ctk.CTkButton(
             self.scroll,
@@ -525,6 +543,25 @@ class ShortsTab(ctk.CTkFrame):
                         pass
 
             self._highlight = best
+            self._highlights = []  # store top N for multi-clip
+
+            if windows and ranked:
+                # Groq/Ollama may have re-ranked; store all candidates
+                if hcfg.get("use_groq") and hcfg.get("method") in ("groq", "hybrid"):
+                    try:
+                        shortlist_all = ranked[: hcfg.get("top_candidates", 5)]
+                        gcfg_all = cfg.get("groq", {})
+                        order_all = highlight_finder.score_groq(
+                            shortlist_all,
+                            gcfg_all.get("llm_model", "llama-3.3-70b-versatile"),
+                        )
+                        self._highlights = [shortlist_all[i] for i in order_all]
+                    except Exception:
+                        self._highlights = ranked[:5]
+                else:
+                    self._highlights = ranked[:5]
+            else:
+                self._highlights = [best]
 
             # ── Update UI ─────────────────────────────────────────────────
             def update_ui():
@@ -580,111 +617,145 @@ class ShortsTab(ctk.CTkFrame):
         def work():
             cfg = self._cfg
             vcfg = cfg.get("video", {})
+            num_clips = int(self.num_clips_var.get())
 
-            try:
-                clip_start = float(self.start_entry.get())
-                clip_end = float(self.end_entry.get())
-            except ValueError:
-                raise ValueError("Enter valid start / end times")
-            if clip_end <= clip_start:
-                raise ValueError("End time must be after start time")
+            # Determine which highlights to build
+            highlights_to_build = []
+            if num_clips == 1:
+                # Single clip uses the user-edited start/end times
+                try:
+                    clip_start = float(self.start_entry.get())
+                    clip_end = float(self.end_entry.get())
+                except ValueError:
+                    raise ValueError("Enter valid start / end times")
+                if clip_end <= clip_start:
+                    raise ValueError("End time must be after start time")
+                highlights_to_build = [{"start": clip_start, "end": clip_end}]
+            else:
+                # Multi-clip: use top N ranked highlights
+                if len(self._highlights) < num_clips:
+                    num_clips = len(self._highlights)
+                highlights_to_build = self._highlights[:num_clips]
+                if not highlights_to_build:
+                    raise ValueError("No highlights found. Run Analyze first.")
 
             base = os.path.splitext(os.path.basename(self._video_path))[0]
             clips_dir = cfg.get("paths", {}).get("clips", "")
             final_dir = cfg.get("paths", {}).get("final", "")
+            self._final_paths = []
 
-            # 1. Clip & center-crop to 9:16
-            self.after(
-                0, lambda: self._set_status(self.build_status, "✂ Clipping…")
-            )
-            clip_out = os.path.join(clips_dir, f"{base}_clip.mp4")
-            cmd = clipper.ffmpeg_center_crop_cmd(
-                self._video_path,
-                clip_out,
-                clip_start,
-                clip_end,
-                vcfg.get("target_width", 1080),
-                vcfg.get("target_height", 1920),
-                vcfg.get("fps", 30),
-            )
-            subprocess.run(cmd, check=True, capture_output=True)
-            current = clip_out
+            for clip_idx, hl in enumerate(highlights_to_build, start=1):
+                clip_start = hl["start"]
+                clip_end = hl["end"]
+                suffix = f"_clip{clip_idx}" if num_clips > 1 else "_clip"
+                final_suffix = f"_final{clip_idx}" if num_clips > 1 else "_final"
 
-            # 2. Mix music
-            track = self.track_var.get()
-            if track and track != "(none)":
                 self.after(
                     0,
-                    lambda: self._set_status(self.build_status, "🎵 Mixing music…"),
-                )
-                music_dir = cfg.get("paths", {}).get("music", "")
-                track_path = os.path.join(music_dir, track)
-                music_out = os.path.splitext(clip_out)[0] + "_music.mp4"
-                music_selector.mix_music(
-                    current,
-                    track_path,
-                    music_out,
-                    self.vol_var.get(),
-                    cfg.get("music", {}).get("duck_original", True),
-                )
-                current = music_out
-
-            # 3. Burn captions
-            if self.captions_var.get() and self._segments:
-                self.after(
-                    0,
-                    lambda: self._set_status(
-                        self.build_status, "💬 Burning captions…"
+                    lambda i=clip_idx, n=num_clips: self._set_status(
+                        self.build_status,
+                        f"✂ Clipping {i}/{n}…" if n > 1 else "✂ Clipping…",
                     ),
                 )
-                ccfg = cfg.get("captions", {})
-                ass_path = os.path.splitext(current)[0] + ".ass"
-                captioner.build_ass(
-                    self._segments, clip_start, clip_end, ass_path, ccfg
+
+                # 1. Clip & center-crop to 9:16
+                clip_out = os.path.join(clips_dir, f"{base}{suffix}.mp4")
+                cmd = clipper.ffmpeg_center_crop_cmd(
+                    self._video_path,
+                    clip_out,
+                    clip_start,
+                    clip_end,
+                    vcfg.get("target_width", 1080),
+                    vcfg.get("target_height", 1920),
+                    vcfg.get("fps", 30),
                 )
-                final_out = os.path.join(final_dir, f"{base}_final.mp4")
-                # Use relative path and escape single quotes for FFmpeg filter on Windows
-                rel_ass = os.path.relpath(ass_path).replace("\\", "/")
-                rel_ass_esc = rel_ass.replace("'", "'\\''")
-                sub_cmd = [
-                    "ffmpeg", "-y", "-i", current,
-                    "-vf", f"subtitles='{rel_ass_esc}'",
-                    "-c:a", "copy",
-                    final_out,
-                ]
-                subprocess.run(sub_cmd, check=True, capture_output=True)
-                current = final_out
+                subprocess.run(cmd, check=True, capture_output=True)
+                current = clip_out
 
-            # Ensure final video is in the final_dir
-            if not current.startswith(final_dir):
-                import shutil
-                final_out = os.path.join(final_dir, f"{base}_final.mp4")
-                shutil.move(current, final_out)
-                current = final_out
+                # 2. Mix music
+                track = self.track_var.get()
+                music_out = None
+                if track and track != "(none)":
+                    self.after(
+                        0,
+                        lambda i=clip_idx, n=num_clips: self._set_status(
+                            self.build_status,
+                            f"🎵 Mixing music {i}/{n}…" if n > 1 else "🎵 Mixing music…",
+                        ),
+                    )
+                    music_dir = cfg.get("paths", {}).get("music", "")
+                    track_path = os.path.join(music_dir, track)
+                    music_out = os.path.splitext(clip_out)[0] + "_music.mp4"
+                    music_selector.mix_music(
+                        current,
+                        track_path,
+                        music_out,
+                        self.vol_var.get(),
+                        cfg.get("music", {}).get("duck_original", True),
+                    )
+                    current = music_out
 
-            self._final_path = current
+                # 3. Burn captions
+                ass_path = None
+                if self.captions_var.get() and self._segments:
+                    self.after(
+                        0,
+                        lambda i=clip_idx, n=num_clips: self._set_status(
+                            self.build_status,
+                            f"💬 Burning captions {i}/{n}…" if n > 1 else "💬 Burning captions…",
+                        ),
+                    )
+                    ccfg = cfg.get("captions", {})
+                    ass_path = os.path.splitext(current)[0] + ".ass"
+                    captioner.build_ass(
+                        self._segments, clip_start, clip_end, ass_path, ccfg
+                    )
+                    final_out = os.path.join(final_dir, f"{base}{final_suffix}.mp4")
+                    rel_ass = os.path.relpath(ass_path).replace("\\", "/")
+                    rel_ass_esc = rel_ass.replace("'", "'\\''")
+                    sub_cmd = [
+                        "ffmpeg", "-y", "-i", current,
+                        "-vf", f"subtitles='{rel_ass_esc}'",
+                        "-c:a", "copy",
+                        final_out,
+                    ]
+                    subprocess.run(sub_cmd, check=True, capture_output=True)
+                    current = final_out
 
-            # 4. Clean up intermediate files
-            cleanup_files = []
-            if 'clip_out' in locals(): cleanup_files.append(clip_out)
-            if 'music_out' in locals(): cleanup_files.append(music_out)
-            if 'ass_path' in locals(): cleanup_files.append(ass_path)
-            cleanup_files.append(os.path.join(clips_dir, f"{base}.srt"))
+                # Ensure final video is in the final_dir
+                if not current.startswith(final_dir):
+                    import shutil
+                    final_out = os.path.join(final_dir, f"{base}{final_suffix}.mp4")
+                    shutil.move(current, final_out)
+                    current = final_out
 
-            for fpath in cleanup_files:
-                if fpath and os.path.exists(fpath) and fpath != current:
+                self._final_paths.append(current)
+
+                # 4. Clean up intermediate files for this clip
+                for fpath in [clip_out, music_out, ass_path]:
+                    if fpath and os.path.exists(fpath) and fpath != current:
+                        try:
+                            os.remove(fpath)
+                        except Exception:
+                            pass
+                # Clean cached .srt
+                srt_cache = os.path.join(clips_dir, f"{base}.srt")
+                if os.path.exists(srt_cache):
                     try:
-                        os.remove(fpath)
+                        os.remove(srt_cache)
                     except Exception:
                         pass
 
+            self._final_path = self._final_paths[0] if self._final_paths else None
+
+            if num_clips == 1:
+                msg = f"✅ Short ready: {os.path.basename(self._final_paths[0])}"
+            else:
+                msg = f"✅ {len(self._final_paths)} shorts ready in output/final/"
+
             self.after(
                 0,
-                lambda: self._set_status(
-                    self.build_status,
-                    f"✅ Short ready: {os.path.basename(current)}",
-                    "#4CAF50",
-                ),
+                lambda: self._set_status(self.build_status, msg, "#4CAF50"),
             )
             self.after(0, lambda: self.upload_btn.configure(state="normal"))
             self.after(0, lambda: self.build_btn.configure(state="normal"))
