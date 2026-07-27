@@ -1,20 +1,18 @@
 import json
 import os
-import yaml
+import sys
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from core.config import shorts_config
 from datetime import datetime, timezone
-from dotenv import load_dotenv
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_config():
-    load_dotenv(os.path.join(ROOT, ".env"))
-    with open(os.path.join(ROOT, "config", "config.yaml"), "r") as f:
-        cfg = yaml.safe_load(f)
-    for key, rel in cfg["paths"].items():
-        cfg["paths"][key] = os.path.join(ROOT, rel)
-        os.makedirs(cfg["paths"][key], exist_ok=True)
-    return cfg
+    return shorts_config.get_all()
 
 
 def load_job(job_path):

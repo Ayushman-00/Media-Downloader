@@ -5,6 +5,9 @@ from pathlib import Path
 from core.utils import get_default_download_folder
 from core.paths import user_data_path
 
+import yaml
+from dotenv import load_dotenv
+
 # Default configuration
 DEFAULT_CONFIG = {
     "general": {
@@ -92,3 +95,35 @@ class ConfigManager:
 
 # Global config instance
 config = ConfigManager()
+
+class ShortsConfigManager:
+    """Manages the configuration for the yt_shorts_automation pipeline."""
+    def __init__(self):
+        self.project_root = Path(__file__).resolve().parent.parent
+        self.shorts_root = self.project_root / "yt_shorts_automation"
+        self.config = self.load_config()
+
+    def load_config(self):
+        env_path = self.shorts_root / ".env"
+        if env_path.exists():
+            load_dotenv(env_path)
+            
+        yaml_path = self.shorts_root / "config" / "config.yaml"
+        if not yaml_path.exists():
+            return {}
+            
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+            
+        if "paths" in cfg:
+            for key, rel in cfg["paths"].items():
+                abs_path = self.shorts_root / rel
+                cfg["paths"][key] = str(abs_path)
+                os.makedirs(abs_path, exist_ok=True)
+        return cfg
+
+    def get_all(self):
+        return self.config
+
+# Global shorts config instance
+shorts_config = ShortsConfigManager()

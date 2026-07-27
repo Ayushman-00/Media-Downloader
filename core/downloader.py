@@ -1,6 +1,7 @@
 import threading
 import yt_dlp
 import traceback
+import os
 from core.config import config
 from core.history import history_db
 
@@ -22,6 +23,56 @@ BROWSER_MAP = {
     "Edge": "edge",
     "Brave": "brave",
 }
+
+def download_video_sync(url: str, ydl_opts: dict) -> tuple[str, dict]:
+    """Synchronously downloads a video using yt_dlp and returns the filepath and info dict."""
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        if info and "entries" in info:
+            info = info["entries"][0] if info["entries"] else info
+
+        downloads = info.get("requested_downloads", [])
+        if downloads:
+            video_path = downloads[0]["filepath"]
+        else:
+            video_path = ydl.prepare_filename(info)
+            if not os.path.exists(video_path):
+                base = os.path.splitext(video_path)[0]
+                video_path = base + ".mp4"
+                
+    return video_path, info
+
+def download_for_shorts(url: str, output_dir: str, fmt: str = "bestvideo[height<=1080]+bestaudio/best") -> tuple[str, dict]:
+    """Specific wrapper for the Shorts automation pipeline."""
+    os.makedirs(output_dir, exist_ok=True)
+    outtmpl = os.path.join(output_dir, "%(title).200s [%(id)s].%(ext)s")
+    outtmpl = outtmpl.replace("\\", "/")
+    
+    ydl_opts = {
+        "format": fmt,
+        "outtmpl": outtmpl,
+        "merge_output_format": "mp4",
+        "writesubtitles": True,
+        "subtitleslangs": ["en", "en-orig"],
+        "writeinfojson": True,
+        "quiet": False,
+        "no_warnings": False,
+        "postprocessors": [
+            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+        ],
+    }
+    
+    video_path, info = download_video_sync(url, ydl_opts)
+    
+    slim_info = {
+        "id": info.get("id", ""),
+        "title": info.get("title", ""),
+        "duration": info.get("duration", 0),
+        "uploader": info.get("uploader", ""),
+        "webpage_url": info.get("webpage_url", url),
+    }
+    print(f"[downloader] saved: {video_path}", flush=True)
+    return video_path, slim_info
 
 
 class DownloadTask:
@@ -91,12 +142,7 @@ class DownloadTask:
             ydl_opts = dict(self.options)           # shallow copy
             ydl_opts["progress_hooks"] = [self._hook]
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(self.url, download=True)
-
-            # info may be a playlist wrapper; unwrap if needed
-            if info and "entries" in info:
-                info = info["entries"][0] if info["entries"] else info
+            video_path, info = download_video_sync(self.url, ydl_opts)
 
             file_size = 0
             if info:
