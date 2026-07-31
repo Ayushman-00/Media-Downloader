@@ -1,0 +1,14 @@
+[
+  {
+    "id": "synthetic_01",
+    "video_path": "placeholder/synthetic_01.mp4",
+    "segments_path": "placeholder/synthetic_01_segments.json",
+    "golden_bounds": [
+      {
+        "start": 10.5,
+        "end": 45.2,
+        "label": "human_curated_primary"
+      }
+    ]
+  }
+]

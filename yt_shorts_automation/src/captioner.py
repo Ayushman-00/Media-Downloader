@@ -59,8 +59,10 @@ def _build_ass_header(
     font: str = "Arial",
     font_size: int = 48,
     primary_color: str = "&H00FFFFFF",
+    secondary_color: str = "&H000000FF",
     outline_color: str = "&H00000000",
     outline_width: int = 3,
+    shadow: int = 1,
     position: str = "bottom",
 ) -> str:
     """Generate the ASS file header with script info and style definition.
@@ -71,6 +73,7 @@ def _build_ass_header(
       - Positioned at bottom-center (or center based on config)
     """
     primary = _ass_color(primary_color)
+    secondary = _ass_color(secondary_color)
     outline = _ass_color(outline_color)
 
     # ASS alignment values:
@@ -96,7 +99,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{font_size},{primary},&H000000FF,{outline},&H80000000,1,0,0,0,100,100,0,0,1,{outline_width},1,{alignment},40,40,{margin_v},1
+Style: Default,{font},{font_size},{primary},{secondary},{outline},&H80000000,1,0,0,0,100,100,0,0,1,{outline_width},{shadow},{alignment},40,40,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -114,61 +117,110 @@ def build_ass(
     clip_end: float,
     ass_path: str,
     caption_config: Dict,
+    hook_line: str = "",
 ) -> str:
     """Generate an ASS subtitle file for the clipped time range.
 
     Args:
-        segments: Full transcript [{start, end, text}, ...] in original video time.
+        segments: Full transcript [{start, end, text, words?}, ...] in original video time.
         clip_start: Start time of the clip in the original video.
         clip_end: End time of the clip in the original video.
         ass_path: Where to write the .ass file.
         caption_config: Dict from config.yaml['captions'] with font, size, colors, etc.
-
-    The segments are filtered to the clip range and their timestamps are
-    shifted so 0 = start of the clip (matching the clipped video).
+        hook_line: Optional text for an opening hook overlay.
     """
-    # Filter segments that overlap with the clip range
     clip_segments = [
         s for s in segments
         if s["start"] < clip_end and s["end"] > clip_start
     ]
 
-    # Build header from config
+    is_karaoke = caption_config.get("style") == "word_karaoke"
+
+    if is_karaoke:
+        font_size = caption_config.get("font_size", 110)
+        outline_width = caption_config.get("outline_width", 8)
+        shadow = caption_config.get("shadow", 8)
+        primary_color = caption_config.get("highlight_color", "&H0000FFFF")
+        secondary_color = caption_config.get("primary_color", "&H00FFFFFF")
+    else:
+        font_size = caption_config.get("font_size", 48)
+        outline_width = caption_config.get("outline_width", 3)
+        shadow = caption_config.get("shadow", 1)
+        primary_color = caption_config.get("primary_color", "&H00FFFFFF")
+        secondary_color = "&H000000FF"
+
     header = _build_ass_header(
         font=caption_config.get("font", "Arial"),
-        font_size=caption_config.get("font_size", 48),
-        primary_color=caption_config.get("primary_color", "&H00FFFFFF"),
+        font_size=font_size,
+        primary_color=primary_color,
+        secondary_color=secondary_color,
         outline_color=caption_config.get("outline_color", "&H00000000"),
-        outline_width=caption_config.get("outline_width", 3),
+        outline_width=outline_width,
+        shadow=shadow,
         position=caption_config.get("position", "bottom"),
     )
 
-    # Build dialogue lines
     lines = []
+
+    # Optional hook overlay
+    if caption_config.get("hook_overlay", {}).get("enabled") and hook_line:
+        hook_end = min(2.0, clip_end - clip_start)
+        hook_text = _wrap_text(hook_line, max_chars=35).replace("\n", "\\N")
+        # Layer 1, {\b1} bold, {\an8} top-center alignment, explicitly set color to secondary_color (usually white) so it's not yellow
+        hook_ass = f"{{\\c{_ass_color(secondary_color)}\\b1\\an8}}{hook_text}"
+        lines.append(f"Dialogue: 1,{_ass_timestamp(0)},{_ass_timestamp(hook_end)},Default,,0,0,0,,{hook_ass}")
+
     for seg in clip_segments:
-        # Shift timestamps relative to clip start
         seg_start = max(0, seg["start"] - clip_start)
         seg_end = min(clip_end - clip_start, seg["end"] - clip_start)
 
         if seg_end <= seg_start:
             continue
 
+        if is_karaoke and "words" in seg and seg["words"]:
+            shifted_words = []
+            for w in seg["words"]:
+                ws = max(0, w["start"] - clip_start)
+                we = min(clip_end - clip_start, w["end"] - clip_start)
+                if we > ws:
+                    shifted_words.append({"start": ws, "end": we, "word": w["word"]})
+            
+            if shifted_words:
+                chunks = _group_words_karaoke(shifted_words, max_chars=35, max_words=4)
+                
+                pos_tag = ""
+                if is_karaoke and "vertical_position" in caption_config:
+                    vpos = caption_config["vertical_position"]
+                    y = int(1920 * vpos)
+                    pos_tag = f"{{\\an5\\pos(540,{y})}}"
+                    
+                for chunk in chunks:
+                    chunk_start = chunk[0]["start"]
+                    chunk_end = chunk[-1]["end"]
+                    
+                    text_parts = []
+                    for i, w in enumerate(chunk):
+                        dur_cs = max(1, int((w["end"] - w["start"]) * 100))
+                        text_parts.append(f"{{\\k{dur_cs}}}{w['word']}")
+                    
+                    ass_text = pos_tag + " ".join(text_parts)
+                    start_ts = _ass_timestamp(chunk_start)
+                    end_ts = _ass_timestamp(chunk_end)
+                    lines.append(f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{ass_text}")
+                continue
+
+        # Fallback to static line-by-line rendering
         text = seg["text"].strip()
         if not text:
             continue
 
-        # Split long lines for readability on vertical video
-        # (max ~35 chars per line for 1080px width)
         text = _wrap_text(text, max_chars=35)
-
-        # ASS escapes: newlines are \N
         text = text.replace("\n", "\\N")
 
         start_ts = _ass_timestamp(seg_start)
         end_ts = _ass_timestamp(seg_end)
         lines.append(f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{text}")
 
-    # Write the file
     os.makedirs(os.path.dirname(ass_path) or ".", exist_ok=True)
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(header)
@@ -180,10 +232,7 @@ def build_ass(
 
 
 def _wrap_text(text: str, max_chars: int = 35) -> str:
-    """Word-wrap text to fit vertical video width.
-
-    Splits at word boundaries, keeping lines under max_chars.
-    """
+    """Word-wrap text to fit vertical video width."""
     words = text.split()
     if not words:
         return text
@@ -200,3 +249,21 @@ def _wrap_text(text: str, max_chars: int = 35) -> str:
 
     lines.append(current_line)
     return "\n".join(lines)
+
+
+def _group_words_karaoke(words: List[Dict], max_chars: int = 35, max_words: int = 4) -> List[List[Dict]]:
+    """Group words into small chunks for karaoke rendering."""
+    chunks = []
+    current_chunk = []
+    current_len = 0
+    for w in words:
+        word_len = len(w["word"])
+        if current_chunk and (current_len + 1 + word_len > max_chars or len(current_chunk) >= max_words):
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_len = 0
+        current_chunk.append(w)
+        current_len += word_len + (1 if current_chunk else 0)
+    if current_chunk:
+        chunks.append(current_chunk)
+    return chunks

@@ -22,7 +22,8 @@ import glob
 import streamlit as st
 
 from src.utils import load_config
-from src import downloader, transcript as transcript_mod, highlight_finder, clipper, music_selector, captioner, uploader
+from src import downloader, transcript as transcript_mod, highlight_finder, clipper, music_selector, captioner
+from src.uploaders import get_uploader
 
 st.set_page_config(page_title="YT Shorts Automation", layout="wide")
 cfg = load_config()
@@ -43,6 +44,65 @@ if "final_path" not in st.session_state:
     st.session_state.final_path = None
 
 st.title("YT Shorts Automation Dashboard")
+
+# ---------------------------------------------------------------
+# Pending Reviews Panel
+# ---------------------------------------------------------------
+logs_dir = cfg["paths"]["logs"]
+pending_logs = []
+if os.path.exists(logs_dir):
+    for f in glob.glob(os.path.join(logs_dir, "*.json")):
+        try:
+            with open(f, "r") as lf:
+                log_data = json.load(lf)
+                if log_data.get("stages", {}).get("highlight", {}).get("output") == "pending_review":
+                    pending_logs.append((f, log_data))
+        except:
+            pass
+
+if pending_logs:
+    with st.expander(f"Pending Reviews ({len(pending_logs)})", expanded=True):
+        for path, log_data in pending_logs:
+            st.subheader(f"Job: {log_data.get('job_id', os.path.basename(path))}")
+            # Show candidates
+            cands = log_data.get("decisions", {}).get("highlight", {}).get("candidates", [])
+            
+            if not cands:
+                st.warning("No candidates found in log.")
+                continue
+                
+            selected_idx = st.selectbox(
+                "Select candidate to approve",
+                range(len(cands)),
+                format_func=lambda i: f"[{cands[i].get('final_score', 0):.1f}] {cands[i].get('hook_line', 'No hook')}",
+                key=f"sel_{log_data.get('job_id', path)}"
+            )
+            
+            cand = cands[selected_idx]
+            st.write(f"**Rationale:** {cand.get('rationale')}")
+            st.write(f"**Hook Type:** {cand.get('hook_type')} | **Payoff Type:** {cand.get('payoff_type')}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                adj_start = st.number_input("Start time", value=float(cand.get("start", 0)), step=0.1, key=f"start_{log_data.get('job_id', path)}")
+            with col2:
+                adj_end = st.number_input("End time", value=float(cand.get("end", 0)), step=0.1, key=f"end_{log_data.get('job_id', path)}")
+                
+            if st.button("Approve", key=f"btn_{log_data.get('job_id', path)}"):
+                log_data["stages"]["highlight"]["start"] = adj_start
+                log_data["stages"]["highlight"]["end"] = adj_end
+                log_data["stages"]["highlight"]["output"] = "scored"
+                log_data["stages"]["highlight"]["reason"] = "human_approved"
+                if "decisions" not in log_data:
+                    log_data["decisions"] = {}
+                log_data["decisions"]["review_approved"] = True
+                
+                with open(path, "w") as lf:
+                    json.dump(log_data, lf, indent=2)
+                st.success("Approved! The pipeline can now be resumed for this job.")
+                st.rerun()
+
+st.divider()
 
 # ---------------------------------------------------------------
 # Step 1 - Download
@@ -251,17 +311,18 @@ if st.session_state.final_path:
         else:
             with st.spinner("Authenticating + uploading (a browser window may open for login)..."):
                 try:
-                    youtube = uploader.get_authenticated_service(cfg)
-                    response = uploader.upload(
-                        youtube, st.session_state.final_path,
-                        title=title, description=description,
-                        tags=[t.strip() for t in tags.split(",") if t.strip()],
-                        category_id=cfg["upload"]["category_id"],
-                        privacy_status=privacy,
-                        publish_at=schedule_time,
-                        made_for_kids=cfg["upload"].get("made_for_kids", False),
-                    )
-                    video_id = response.get("id")
-                    st.success(f"Posted: https://youtube.com/watch?v={video_id}")
+                    uploader = get_uploader(cfg)
+                    metadata = {
+                        "title": title,
+                        "description": description,
+                        "tags": [t.strip() for t in tags.split(",") if t.strip()],
+                        "category_id": cfg["upload"]["category_id"],
+                        "privacy_status": privacy,
+                        "publish_at": schedule_time,
+                        "made_for_kids": cfg["upload"].get("made_for_kids", False)
+                    }
+                    response = uploader.upload(st.session_state.final_path, metadata)
+                    st.success(f"Uploaded! Video ID: {response.get('id')}")
+                    st.markdown(f"**Link:** [youtu.be/{response.get('id')}](https://youtu.be/{response.get('id')})")
                 except Exception as e:
-                    st.error(f"Upload failed: {e}")
+                        st.error(f"Upload failed: {e}")

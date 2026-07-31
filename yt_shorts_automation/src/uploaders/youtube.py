@@ -194,3 +194,23 @@ def upload(
     video_id = response.get("id", "unknown")
     print(f"[uploader] upload complete: https://youtube.com/watch?v={video_id}", flush=True)
     return response
+
+from src.uploaders.base import Uploader
+
+class YouTubeUploader(Uploader):
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.youtube = get_authenticated_service(cfg)
+        
+    def upload(self, file_path: str, metadata: dict) -> dict:
+        return upload(
+            self.youtube,
+            file_path,
+            title=metadata.get("title", "My Short #Shorts"),
+            description=metadata.get("description", "#Shorts"),
+            tags=metadata.get("tags", ["shorts"]),
+            category_id=metadata.get("category_id", "22"),
+            privacy_status=metadata.get("privacy_status", "private"),
+            publish_at=metadata.get("publish_at"),
+            made_for_kids=metadata.get("made_for_kids", False)
+        )

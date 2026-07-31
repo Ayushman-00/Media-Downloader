@@ -1,0 +1,10 @@
+# Vlog Preset (High energy, punchy, bold aesthetics)
+highlight:
+  window_sec: 30      # Short and fast context
+  step_sec: 10
+captions:
+  style: word_karaoke # Kinetic typography for vlogs
+  hook_overlay:
+    enabled: true     # Very aggressive bold hooks
+music:
+  default_volume: 0.15 # Louder music for high energy

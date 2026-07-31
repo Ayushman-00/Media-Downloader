@@ -1,0 +1,10 @@
+# Tutorial Preset (Instructional, clear, medium-paced)
+highlight:
+  window_sec: 45
+  step_sec: 15
+captions:
+  style: static       # Clear line-by-line reading
+  hook_overlay:
+    enabled: true     # Hook overlay is useful to establish topic quickly
+music:
+  default_volume: 0.05 # Lower volume so instructions are heard clearly

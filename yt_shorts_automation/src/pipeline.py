@@ -19,8 +19,9 @@ import os
 import subprocess
 from typing import Dict, List, Optional
 
-from src.utils import load_config, load_job, mark_stage, get_stage_output, read_log
-from src import downloader, transcript, highlight_finder, clipper, music_selector, captioner, uploader
+from src.utils import load_config, load_job, mark_stage, get_stage_output, read_log, write_log
+from src import downloader, transcript, highlight_finder, clipper, music_selector, captioner
+from src.uploaders import get_uploader
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +35,14 @@ def stage_download(job: dict, cfg: dict, job_path: str) -> str:
         print(f"[pipeline] download already done: {existing}", flush=True)
         return existing
 
-    url = job["url"]
+    if "source" in job and os.path.isfile(job["source"]):
+        print(f"[pipeline] using local source: {job['source']}", flush=True)
+        mark_stage(job_path, cfg, "download", job["source"])
+        return job["source"]
+
+    url = job.get("url")
+    if not url:
+        raise ValueError("Job must contain 'url' or a valid local 'source' file")
     dcfg = cfg["downloader"]
 
     if dcfg.get("use_external_exe"):
@@ -65,22 +73,38 @@ def stage_transcript(job: dict, cfg: dict, job_path: str, video_path: str) -> Li
     segments = None
 
     # Waterfall: youtube-transcript-api → local VTT → Groq Whisper → local Whisper
+    method = None
     if tcfg.get("use_youtube_transcript_api") and url:
         segments = transcript.fetch_youtube_captions(url)
+        if segments:
+            method = "youtube_api"
 
     if not segments and tcfg.get("prefer_youtube_captions"):
         vtt = transcript.find_existing_captions(video_path)
         if vtt:
             segments = transcript.parse_vtt(vtt)
+            if segments:
+                method = "local_vtt"
 
     if not segments and tcfg.get("groq_whisper_fallback"):
         segments = transcript.transcribe_with_groq(video_path)
+        if segments:
+            method = "groq_whisper"
 
     if not segments and tcfg.get("whisper_fallback"):
         segments = transcript.transcribe_with_whisper(video_path, tcfg.get("whisper_model", "base"))
+        if segments:
+            method = "local_whisper"
 
     if not segments:
         segments = []
+        method = "none"
+
+    log = read_log(job_path, cfg)
+    if "decisions" not in log:
+        log["decisions"] = {}
+    log["decisions"]["transcript"] = {"method": method}
+    write_log(job_path, cfg, log)
 
     # Save to disk for idempotency
     import json
@@ -102,6 +126,9 @@ def stage_highlight(
         if "start" in hl and "end" in hl:
             print(f"[pipeline] highlight already done: {hl['start']:.1f}s-{hl['end']:.1f}s", flush=True)
             return {"start": hl["start"], "end": hl["end"]}
+        elif existing == "pending_review":
+            print(f"[pipeline] highlight pending review", flush=True)
+            return None
 
     hcfg = cfg["highlight"]
 
@@ -118,36 +145,88 @@ def stage_highlight(
         return best
 
     total_duration = segments[-1]["end"]
-    windows = highlight_finder.make_windows(
-        segments, hcfg["window_sec"], hcfg["step_sec"], total_duration
-    )
+    
+    log = read_log(job_path, cfg)
+    if "decisions" not in log:
+        log["decisions"] = {}
 
-    if not windows:
-        best = {"start": 0, "end": min(45, total_duration), "reason": "single window"}
-        mark_stage(job_path, cfg, "highlight", "fallback", extra=best)
-        return best
-
-    ranked = highlight_finder.score_heuristic(video_path, windows)
-    best = {**ranked[0], "reason": "heuristic"}
-
-    # Cloud LLM re-ranking
-    if hcfg.get("use_groq") and hcfg["method"] in ("groq", "hybrid"):
-        try:
-            shortlist = ranked[: hcfg["top_candidates"]]
-            gcfg = cfg.get("groq", {})
-            order = highlight_finder.score_groq(shortlist, gcfg.get("llm_model", "llama-3.3-70b-versatile"))
-            best = {**shortlist[order[0]], "reason": "groq_llm"}
+    engine = hcfg.get("engine", "heuristic_only")
+    best = None
+    
+    if engine == "propose_refine_judge":
+        cached = log.get("decisions", {}).get("highlight", {})
+        if cached.get("method") == "propose_refine_judge" and cached.get("candidates"):
+            print("[pipeline] Using cached LLM propose_refine_judge candidates", flush=True)
+            candidates = cached["candidates"]
+            best = candidates[0]
+            best["reason"] = "propose_refine_judge"
+        else:
+            try:
+                from src import highlight_engine
+                candidates = highlight_engine.run_engine(video_path, segments, cfg)
+                best = candidates[0]
+                
+                log["decisions"]["highlight"] = {
+                    "method": "propose_refine_judge",
+                    "candidates": candidates
+                }
+                write_log(job_path, cfg, log)
+                best["reason"] = "propose_refine_judge"
         except Exception as e:
-            print(f"[pipeline] Groq scoring failed, using heuristic: {e}", flush=True)
-    elif hcfg.get("use_ollama") and hcfg["method"] in ("ollama", "hybrid"):
-        try:
-            shortlist = ranked[: hcfg["top_candidates"]]
-            order = highlight_finder.score_llm(shortlist, hcfg["ollama_url"], hcfg["ollama_model"])
-            best = {**shortlist[order[0]], "reason": "ollama_llm"}
-        except Exception as e:
-            print(f"[pipeline] Ollama scoring failed, using heuristic: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            print(f"[pipeline] propose_refine_judge failed: {e}. Falling back...", flush=True)
+            log["decisions"]["highlight"] = {
+                "method": "fallback_after_failure",
+                "error": str(e)
+            }
+            write_log(job_path, cfg, log)
+
+    if best is None:
+        windows = highlight_finder.make_windows(
+            segments, hcfg["window_sec"], hcfg["step_sec"], total_duration
+        )
+
+        if not windows:
+            best = {"start": 0, "end": min(45, total_duration), "reason": "single window"}
+            mark_stage(job_path, cfg, "highlight", "fallback", extra=best)
+            return best
+
+        ranked = highlight_finder.score_heuristic(video_path, windows)
+        best = {**ranked[0], "reason": "heuristic"}
+
+        # Cloud LLM re-ranking
+        if hcfg.get("use_groq") and hcfg["method"] in ("groq", "hybrid"):
+            try:
+                shortlist = ranked[: hcfg["top_candidates"]]
+                gcfg = cfg.get("groq", {})
+                order = highlight_finder.score_groq(shortlist, gcfg.get("llm_model", "llama-3.3-70b-versatile"))
+                best = {**shortlist[order[0]], "reason": "groq_llm"}
+            except Exception as e:
+                print(f"[pipeline] Groq scoring failed, using heuristic: {e}", flush=True)
+        elif hcfg.get("use_ollama") and hcfg["method"] in ("ollama", "hybrid"):
+            try:
+                shortlist = ranked[: hcfg["top_candidates"]]
+                order = highlight_finder.score_llm(shortlist, hcfg["ollama_url"], hcfg["ollama_model"])
+                best = {**shortlist[order[0]], "reason": "ollama_llm"}
+            except Exception as e:
+                print(f"[pipeline] Ollama scoring failed, using heuristic: {e}", flush=True)
+                
+        if "highlight" not in log["decisions"] or log["decisions"]["highlight"].get("method") == "fallback_after_failure":
+            log["decisions"]["highlight"] = {"method": best.get("reason", "heuristic")}
+            write_log(job_path, cfg, log)
+
+    if cfg.get("review", {}).get("enabled", False):
+        log = read_log(job_path, cfg)
+        # If it hasn't been approved yet (i.e. start and end are not in stages["highlight"])
+        # We write output="pending_review" and stop here.
+        mark_stage(job_path, cfg, "highlight", "pending_review")
+        return None
 
     clean_best = {"start": best["start"], "end": best["end"], "reason": best.get("reason", "heuristic")}
+    if "hook_line" in best:
+        clean_best["hook_line"] = best["hook_line"]
+        
     mark_stage(job_path, cfg, "highlight", "scored", extra=clean_best)
     return best
 
@@ -175,15 +254,20 @@ def stage_clip(job: dict, cfg: dict, job_path: str, video_path: str, highlight: 
     return clip_out
 
 
-def stage_music(job: dict, cfg: dict, job_path: str, clip_path: str) -> str:
-    """Stage 5: Mix in background music."""
+def stage_music(job: dict, cfg: dict, job_path: str, clip_path: str) -> dict:
+    """Stage 5: Select background music (no encoding)."""
     existing = get_stage_output(job_path, cfg, "music")
-    if existing and os.path.isfile(existing):
-        print(f"[pipeline] music already done: {existing}", flush=True)
-        return existing
+    log = read_log(job_path, cfg)
+    existing_extra = log.get("stages", {}).get("music", {}).get("extra", {})
+    if existing and existing_extra.get("track_path"):
+        print(f"[pipeline] music already selected: {existing_extra['track_path']}", flush=True)
+        return existing_extra
 
     mcfg = cfg["music"]
     music_dir = cfg["paths"]["music"]
+    
+    volume = job.get("music_volume", mcfg["default_volume"])
+    track_path = ""
 
     # Job can specify a track, otherwise pick the first available
     track_name = job.get("music_track", "")
@@ -192,63 +276,69 @@ def stage_music(job: dict, cfg: dict, job_path: str, clip_path: str) -> str:
     else:
         tracks = music_selector.list_available_tracks(music_dir)
         if not tracks:
-            print("[pipeline] no music tracks available, skipping music stage", flush=True)
-            mark_stage(job_path, cfg, "music", clip_path, extra={"skipped": True})
-            return clip_path
+            print("[pipeline] no music tracks available, skipping music", flush=True)
+            mark_stage(job_path, cfg, "music", "skipped")
+            return {"track_path": None, "volume": 0}
         track_path = os.path.join(music_dir, tracks[0])
         print(f"[pipeline] auto-selected track: {tracks[0]}", flush=True)
 
-    music_out = os.path.splitext(clip_path)[0] + "_music.mp4"
-    volume = job.get("music_volume", mcfg["default_volume"])
-    music_selector.mix_music(clip_path, track_path, music_out, volume, mcfg.get("duck_original", True))
-
-    mark_stage(job_path, cfg, "music", music_out)
-    return music_out
+    music_meta = {"track_path": track_path, "volume": volume, "duck_original": mcfg.get("duck_original", True)}
+    mark_stage(job_path, cfg, "music", "selected", extra=music_meta)
+    return music_meta
 
 
 def stage_caption(
-    job: dict, cfg: dict, job_path: str, video_path: str,
+    job: dict, cfg: dict, job_path: str, clip_path: str, music_meta: dict,
     segments: List[Dict], highlight: Dict,
 ) -> str:
-    """Stage 6: Burn captions into the video."""
+    """Stage 6: Final consolidated pass (burn captions + mix music)."""
     existing = get_stage_output(job_path, cfg, "caption")
     if existing and os.path.isfile(existing):
         print(f"[pipeline] caption already done: {existing}", flush=True)
         return existing
 
     ccfg = cfg["captions"]
-
-    if not ccfg.get("enabled", True):
-        print("[pipeline] captions disabled, skipping", flush=True)
-        mark_stage(job_path, cfg, "caption", video_path, extra={"skipped": True})
-        return video_path
-
-    if not segments:
-        print("[pipeline] no transcript segments, skipping captions", flush=True)
-        mark_stage(job_path, cfg, "caption", video_path, extra={"skipped": True})
-        return video_path
-
-    # Build .ass file
-    ass_path = os.path.splitext(video_path)[0] + ".ass"
-    captioner.build_ass(
-        segments,
-        highlight["start"], highlight["end"],
-        ass_path, ccfg,
-    )
-
-    # Burn into video
     final_out = os.path.join(
         cfg["paths"]["final"],
-        os.path.basename(os.path.splitext(video_path)[0]) + "_final.mp4",
+        os.path.basename(os.path.splitext(clip_path)[0]) + "_final.mp4",
     )
-    ass_for_filter = ass_path.replace("\\", "/").replace(":", "\\:")
-    cmd = [
-        "ffmpeg", "-y", "-i", video_path,
-        "-vf", f"subtitles='{ass_for_filter}'",
-        "-c:a", "copy",
-        final_out,
-    ]
-    print("[pipeline] burning captions...", flush=True)
+
+    if not ccfg.get("enabled", True):
+        # We still need to encode music if captions are disabled but music is present
+        # but for simplicity we rely on the same single pass without subtitles
+        ass_path = None
+    else:
+        # Build .ass file
+        ass_path = os.path.splitext(clip_path)[0] + ".ass"
+        hook_line = highlight.get("hook_line", "")
+        captioner.build_ass(
+            segments,
+            highlight["start"], highlight["end"],
+            ass_path, ccfg,
+            hook_line=hook_line
+        )
+
+    print("[pipeline] running consolidated ffmpeg pass (music + captions)...", flush=True)
+    
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", clip_path]
+    track_path = music_meta.get("track_path")
+    
+    if track_path and os.path.isfile(track_path):
+        cmd.extend(["-i", track_path])
+        volume = music_meta.get("volume", 0.3)
+        filter_complex = f"[0:a]volume={volume}[a0]; [1:a]volume={volume}[a1]; [a0][a1]amix=inputs=2:duration=first:dropout_transition=2[a]"
+        cmd.extend(["-filter_complex", filter_complex, "-map", "0:v", "-map", "[a]", "-c:a", "aac"])
+    else:
+        cmd.extend(["-c:a", "copy"])
+        
+    if ass_path:
+        ass_for_filter = ass_path.replace("\\", "/").replace(":", "\\:")
+        cmd.extend(["-vf", f"subtitles='{ass_for_filter}'", "-c:v", "libx264"])
+    else:
+        cmd.extend(["-c:v", "copy"])
+        
+    cmd.append(final_out)
+    
     subprocess.run(cmd, check=True)
 
     mark_stage(job_path, cfg, "caption", final_out)
@@ -262,25 +352,8 @@ def stage_upload(job: dict, cfg: dict, job_path: str, final_path: str) -> Dict:
         print(f"[pipeline] upload already done: {existing}", flush=True)
         return {"id": existing}
 
-    youtube = uploader.get_authenticated_service(cfg)
-
-    title = job.get("title", "My Short #Shorts")
-    description = job.get("description", "#Shorts")
-    tags = job.get("tags", ["shorts"])
-    if isinstance(tags, str):
-        tags = [t.strip() for t in tags.split(",") if t.strip()]
-    privacy = job.get("privacy", "private")
-    publish_at = job.get("publish_at", None)
-    made_for_kids = cfg["upload"].get("made_for_kids", False)
-
-    response = uploader.upload(
-        youtube, final_path,
-        title=title, description=description, tags=tags,
-        category_id=cfg["upload"]["category_id"],
-        privacy_status=privacy,
-        publish_at=publish_at,
-        made_for_kids=made_for_kids,
-    )
+    uploader = get_uploader(cfg)
+    response = uploader.upload(final_path, job)
 
     video_id = response.get("id", "unknown")
     mark_stage(job_path, cfg, "upload", video_id, extra={"url": f"https://youtube.com/watch?v={video_id}"})
@@ -299,8 +372,9 @@ def run_pipeline(job_path: str, only_stage: Optional[str] = None):
         only_stage: if set, only run this specific stage
                     (download|transcript|highlight|clip|music|caption|upload)
     """
-    cfg = load_config()
     job = load_job(job_path)
+    preset = job.get("preset")
+    cfg = load_config(preset=preset)
 
     print(f"[pipeline] starting job: {job_path}", flush=True)
     print(f"[pipeline] url: {job.get('url', 'N/A')}", flush=True)
@@ -340,7 +414,15 @@ def run_pipeline(job_path: str, only_stage: Optional[str] = None):
     else:
         log = read_log(job_path, cfg)
         hl = log["stages"].get("highlight", {})
-        highlight = {"start": hl.get("start", 0), "end": hl.get("end", 45)}
+        if hl.get("output") == "pending_review":
+            highlight = None
+        else:
+            highlight = {"start": hl.get("start", 0), "end": hl.get("end", 45), "hook_line": hl.get("hook_line", "")}
+
+    if not highlight:
+        print("[pipeline] Halting: Job is pending human review.", flush=True)
+        return
+        
     if only_stage == "highlight":
         return
 
@@ -356,17 +438,18 @@ def run_pipeline(job_path: str, only_stage: Optional[str] = None):
 
     # --- Music ---
     if only_stage in (None, "music"):
-        music_path = stage_music(job, cfg, job_path, clip_path)
+        music_meta = stage_music(job, cfg, job_path, clip_path)
     else:
-        music_path = get_stage_output(job_path, cfg, "music") or clip_path
+        log = read_log(job_path, cfg)
+        music_meta = log.get("stages", {}).get("music", {}).get("extra", {})
     if only_stage == "music":
         return
 
     # --- Caption ---
     if only_stage in (None, "caption"):
-        final_path = stage_caption(job, cfg, job_path, music_path, segments, highlight)
+        final_path = stage_caption(job, cfg, job_path, clip_path, music_meta, segments, highlight)
     else:
-        final_path = get_stage_output(job_path, cfg, "caption") or music_path
+        final_path = get_stage_output(job_path, cfg, "caption") or clip_path
     if only_stage == "caption":
         return
 

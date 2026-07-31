@@ -122,8 +122,28 @@ class ShortsConfigManager:
                 os.makedirs(abs_path, exist_ok=True)
         return cfg
 
-    def get_all(self):
-        return self.config
+    def get_all(self, preset=None):
+        import copy
+        import yaml
+        
+        cfg = copy.deepcopy(self.config)
+        if preset:
+            preset_path = self.shorts_root / "config" / "presets" / f"{preset}.yaml"
+            if preset_path.exists():
+                with open(preset_path, "r", encoding="utf-8") as f:
+                    preset_cfg = yaml.safe_load(f) or {}
+                cfg = self._deep_merge(cfg, preset_cfg)
+            else:
+                print(f"[config] Warning: Preset '{preset}' not found at {preset_path}")
+        return cfg
+
+    def _deep_merge(self, base, override):
+        for k, v in override.items():
+            if isinstance(v, dict) and k in base and isinstance(base[k], dict):
+                base[k] = self._deep_merge(base[k], v)
+            else:
+                base[k] = v
+        return base
 
 # Global shorts config instance
 shorts_config = ShortsConfigManager()

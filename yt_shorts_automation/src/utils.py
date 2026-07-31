@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def load_config():
-    return shorts_config.get_all()
+def load_config(preset=None):
+    return shorts_config.get_all(preset=preset)
 
 
 def load_job(job_path):

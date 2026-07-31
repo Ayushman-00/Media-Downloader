@@ -25,7 +25,7 @@ BROWSER_MAP = {
 }
 
 def download_video_sync(url: str, ydl_opts: dict) -> tuple[str, dict]:
-    """Synchronously downloads a video using yt_dlp and returns the downloaded filepath and info dict."""
+    """Synchronously downloads a video using yt_dlp and returns the filepath and info dict."""
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         if info and "entries" in info:

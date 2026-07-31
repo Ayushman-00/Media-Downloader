@@ -367,6 +367,8 @@ def transcribe_with_groq(media_path: str, language: Optional[str] = None) -> Opt
         body = bytearray()
         body.extend(form_field("model", model))
         body.extend(form_field("response_format", "verbose_json"))
+        body.extend(form_field("timestamp_granularities[]", "word"))
+        body.extend(form_field("timestamp_granularities[]", "segment"))
         if language:
             body.extend(form_field("language", language))
         body.extend(file_header)
@@ -389,12 +391,28 @@ def transcribe_with_groq(media_path: str, language: Optional[str] = None) -> Opt
             result = json.loads(response.read().decode('utf-8'))
             
             segments = []
+            all_words = result.get("words", [])
             for item in result.get("segments", []):
-                segments.append({
+                seg_dict = {
                     "start": item["start"],
                     "end": item["end"],
                     "text": item["text"].strip()
-                })
+                }
+                
+                seg_words = item.get("words")
+                if seg_words is None and all_words:
+                    seg_words = [
+                        {"start": w["start"], "end": w["end"], "word": w["word"]}
+                        for w in all_words 
+                        if w["start"] >= item["start"] - 0.1 and w["start"] <= item["end"] + 0.1
+                    ]
+                elif seg_words:
+                    seg_words = [{"start": w["start"], "end": w["end"], "word": w["word"]} for w in seg_words]
+                
+                if seg_words:
+                    seg_dict["words"] = seg_words
+                    
+                segments.append(seg_dict)
             print(f"[transcript] Groq success: {len(segments)} segments", flush=True)
             return segments
     except urllib.error.HTTPError as e:
@@ -472,6 +490,7 @@ def transcribe_with_whisper(
         "language": language,
         "beam_size": 5,
         "condition_on_previous_text": False,
+        "word_timestamps": True,
     }
 
     if _vad_enabled():
@@ -484,11 +503,17 @@ def transcribe_with_whisper(
 
     segments = []
     for s in segments_iter:
-        segments.append({
+        seg_dict = {
             "start": float(s.start),
             "end": float(s.end),
             "text": (s.text or "").strip(),
-        })
+        }
+        if getattr(s, "words", None):
+            seg_dict["words"] = [
+                {"start": float(w.start), "end": float(w.end), "word": w.word}
+                for w in s.words
+            ]
+        segments.append(seg_dict)
 
     duration = float(getattr(info, "duration", 0.0)) or (
         segments[-1]["end"] if segments else 0.0

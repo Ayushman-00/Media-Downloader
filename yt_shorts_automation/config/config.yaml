@@ -47,6 +47,9 @@ transcript:
 # Highlight detection settings (next module)
 # ------------------------------------
 highlight:
+  engine: propose_refine_judge
+  max_candidates: 10
+  min_candidate_separation_sec: 20
   window_sec: 45
   step_sec: 5
   method: groq   # heuristic | groq | ollama | hybrid
@@ -76,11 +79,17 @@ music:
 # ------------------------------------
 captions:
   enabled: true
+  style: word_karaoke
+  hook_overlay:
+    enabled: true
   font: "Arial"
-  font_size: 48
+  font_size: 110
+  vertical_position: 0.6
+  highlight_color: "&H0000FFFF"
   primary_color: "&H00FFFFFF"
   outline_color: "&H00000000"
-  outline_width: 3
+  outline_width: 8
+  shadow: 8
   position: "bottom"
 
 # ------------------------------------
@@ -96,3 +105,9 @@ upload:
 groq:
   whisper_model: whisper-large-v3-turbo
   llm_model: llama-3.3-70b-versatile
+
+# ------------------------------------
+# Review settings
+# ------------------------------------
+review:
+  enabled: true

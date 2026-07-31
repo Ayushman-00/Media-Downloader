@@ -90,6 +90,43 @@ def _ratio(aspect_ratio: str) -> float:
         return 9.0 / 16.0
 
 
+def smooth_trajectory(raw_centers: List[Optional[Tuple[int, int]]], src_w: int, src_h: int) -> List[Tuple[int, int]]:
+    """Fill Nones and apply exponential smoothing with max pan clamping."""
+    smoothed_centers = []
+    last_valid = (src_w // 2, src_h // 2)
+    
+    # Fill Nones
+    for c in raw_centers:
+        if c is not None:
+            last_valid = c
+        smoothed_centers.append(last_valid)
+        
+    # Apply exponential smoothing and clamp pan speed
+    if smoothed_centers:
+        smoothing = 0.15
+        max_pan = src_w * 0.05  # max 5% pan per frame
+        
+        for i in range(1, len(smoothed_centers)):
+            lx, ly = smoothed_centers[i-1]
+            cx, cy = smoothed_centers[i]
+            
+            dx = cx - lx
+            dy = cy - ly
+            
+            sx = lx + dx * smoothing
+            sy = ly + dy * smoothing
+            
+            # Clamp speed
+            if abs(sx - lx) > max_pan:
+                sx = lx + (max_pan if sx > lx else -max_pan)
+            if abs(sy - ly) > max_pan:
+                sy = ly + (max_pan if sy > ly else -max_pan)
+                
+            smoothed_centers[i] = (int(sx), int(sy))
+            
+    return smoothed_centers
+
+
 def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str = "9:16") -> str:
     """Crop the clip to target aspect ratio, tracking faces if possible.
 
@@ -131,9 +168,8 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str = "9:16") -
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(silent_path, fourcc, fps, (crop_w, crop_h))
 
-    last_center: Optional[Tuple[int, int]] = None
-    smoothing = 0.15
-
+    # Pass 1: Collect raw centers
+    raw_centers = []
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -145,27 +181,34 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str = "9:16") -
         )
 
         if len(faces) > 0:
-            # Pick the largest face (usually the speaker)
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
             cx = x + w // 2
             cy = y + h // 2
-            if last_center is None:
-                last_center = (cx, cy)
-            else:
-                lx, ly = last_center
-                last_center = (
-                    int(lx + (cx - lx) * smoothing),
-                    int(ly + (cy - ly) * smoothing),
-                )
+            raw_centers.append((cx, cy))
+        else:
+            raw_centers.append(None)
+            
+    # Process trajectory
+    smoothed_centers = smooth_trajectory(raw_centers, src_w, src_h)
+            
+    # Pass 2: Write cropped frames
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    frame_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        if frame_idx < len(smoothed_centers):
+            cx, cy = smoothed_centers[frame_idx]
+        else:
+            cx, cy = smoothed_centers[-1] if smoothed_centers else (src_w // 2, src_h // 2)
 
-        if last_center is None:
-            last_center = (src_w // 2, src_h // 2)
-
-        cx, cy = last_center
-        x0 = max(0, min(src_w - crop_w, cx - crop_w // 2))
-        y0 = max(0, min(src_h - crop_h, cy - crop_h // 2))
+        x0 = max(0, min(src_w - crop_w, int(cx) - crop_w // 2))
+        y0 = max(0, min(src_h - crop_h, int(cy) - crop_h // 2))
         cropped = frame[y0:y0 + crop_h, x0:x0 + crop_w]
         writer.write(cropped)
+        frame_idx += 1
 
     cap.release()
     writer.release()

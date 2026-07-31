@@ -1,0 +1,10 @@
+# Podcast Preset (Speech-heavy, longer cuts, clean captions)
+highlight:
+  window_sec: 60      # Longer context for podcast clips
+  step_sec: 20
+captions:
+  style: static       # Traditional line-by-line subtitles for clean look
+  hook_overlay:
+    enabled: false    # Podcasts usually don't need giant hook text
+music:
+  default_volume: 0.05 # Lower volume to ensure speech is very clear
