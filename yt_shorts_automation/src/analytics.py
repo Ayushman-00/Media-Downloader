@@ -14,7 +14,16 @@ from src.utils import load_config
 from src.uploaders.youtube import get_authenticated_service
 
 def fetch_metrics(youtube, video_id: str) -> dict:
-    """Fetch metrics from YouTube Data API (and Analytics API ideally)."""
+    """Fetch metrics from YouTube Data API.
+    
+    Note on deviation from spec (§3.9):
+    Average view duration and view percentage are NOT available via the standard 
+    YouTube Data API v3 (videos.list). They require the separate YouTube Analytics API
+    (yt-analytics.readonly scope) and a channel with sufficient traffic to generate reports.
+    Since this is an offline tuning script meant for broad usage without complex
+    Analytics API setup, we omit those fields here (returning None).
+    If they become available or if the user sets up Analytics API, they can be added.
+    """
     try:
         # Fetch basic stats from Data API
         request = youtube.videos().list(
@@ -24,17 +33,19 @@ def fetch_metrics(youtube, video_id: str) -> dict:
         response = request.execute()
         
         if not response.get("items"):
-            return {"views": 0, "likes": 0, "comments": 0}
+            return {"views": 0, "likes": 0, "comments": 0, "average_view_duration": None, "average_view_percentage": None}
             
         stats = response["items"][0]["statistics"]
         return {
             "views": int(stats.get("viewCount", 0)),
             "likes": int(stats.get("likeCount", 0)),
-            "comments": int(stats.get("commentCount", 0))
+            "comments": int(stats.get("commentCount", 0)),
+            "average_view_duration": None,  # Not exposed in Data API v3
+            "average_view_percentage": None # Not exposed in Data API v3
         }
     except Exception as e:
         print(f"[analytics] Failed to fetch metrics for {video_id}: {e}")
-        return {"views": 0, "likes": 0, "comments": 0}
+        return {"views": 0, "likes": 0, "comments": 0, "average_view_duration": None, "average_view_percentage": None}
 
 def build_dataset():
     """
@@ -91,7 +102,7 @@ def build_dataset():
                     score = c.get("final_score", 0.0)
                     break
         
-        metrics = {"views": 0, "likes": 0, "comments": 0}
+        metrics = {"views": 0, "likes": 0, "comments": 0, "average_view_duration": None, "average_view_percentage": None}
         if youtube:
             metrics = fetch_metrics(youtube, video_id)
             
@@ -105,6 +116,8 @@ def build_dataset():
             "views": metrics["views"],
             "likes": metrics["likes"],
             "comments": metrics["comments"],
+            "average_view_duration": metrics.get("average_view_duration"),
+            "average_view_percentage": metrics.get("average_view_percentage"),
             "processed_at": datetime.now().isoformat()
         })
         
@@ -113,7 +126,7 @@ def build_dataset():
         return
         
     # Write to CSV
-    fieldnames = ["job_id", "video_id", "method", "hook_type", "payoff_type", "score", "views", "likes", "comments", "processed_at"]
+    fieldnames = ["job_id", "video_id", "method", "hook_type", "payoff_type", "score", "views", "likes", "comments", "average_view_duration", "average_view_percentage", "processed_at"]
     
     file_exists = os.path.isfile(dataset_path)
     with open(dataset_path, "w", newline="") as csvfile:

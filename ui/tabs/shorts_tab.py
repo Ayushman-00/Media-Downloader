@@ -29,8 +29,8 @@ from src import (
     clipper,
     music_selector,
     captioner,
-    uploader,
 )
+from src.uploaders import get_uploader
 
 
 class ShortsTab(ctk.CTkFrame):
@@ -137,7 +137,19 @@ class ShortsTab(ctk.CTkFrame):
             state="disabled",
         )
         self.analyze_btn.grid(
-            row=row, column=0, columnspan=2, padx=10, pady=5, sticky="ew"
+            row=row, column=0, padx=10, pady=5, sticky="ew"
+        )
+        
+        self.pre_short_var = ctk.BooleanVar(value=False)
+        self.pre_short_cb = ctk.CTkCheckBox(
+            self.scroll,
+            text="Already a Short (Skip Crop/Analyze)",
+            variable=self.pre_short_var,
+            command=self._on_pre_short_toggle,
+            state="disabled"
+        )
+        self.pre_short_cb.grid(
+            row=row, column=1, padx=10, pady=5, sticky="w"
         )
         row += 1
 
@@ -180,6 +192,7 @@ class ShortsTab(ctk.CTkFrame):
         self.preview_text.grid(
             row=row, column=0, columnspan=2, padx=10, pady=5, sticky="ew"
         )
+        self._fix_mousewheel(self.preview_text)
         row += 1
 
         # ══════════════════════════════════════════════════════════════════
@@ -221,13 +234,35 @@ class ShortsTab(ctk.CTkFrame):
         self.vol_label.grid(row=0, column=1, padx=(8, 0))
         row += 1
 
+        # Caption Toggle
         self.captions_var = ctk.BooleanVar(
             value=self._cfg.get("captions", {}).get("enabled", True)
         )
-        ctk.CTkCheckBox(
-            self.scroll, text="Burn in captions", variable=self.captions_var
-        ).grid(row=row, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+        self.captions_cb = ctk.CTkCheckBox(
+            self.scroll, text="Burn in captions", variable=self.captions_var,
+            command=self._on_captions_toggle
+        )
+        self.captions_cb.grid(row=row, column=0, padx=10, pady=5, sticky="w")
         row += 1
+        
+        # Caption Source Radio
+        self.caption_source_var = ctk.StringVar(value="auto")
+        self.cap_source_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        
+        ctk.CTkRadioButton(self.cap_source_frame, text="Auto (from transcript)", variable=self.caption_source_var, value="auto", command=self._on_captions_toggle).grid(row=0, column=0, padx=(0, 10))
+        ctk.CTkRadioButton(self.cap_source_frame, text="Custom Text", variable=self.caption_source_var, value="custom", command=self._on_captions_toggle).grid(row=0, column=1)
+        
+        self.cap_source_frame.grid(row=row, column=0, columnspan=2, padx=10, pady=2, sticky="w")
+        row += 1
+        
+        # Custom Caption Textbox
+        self.custom_cap_text = ctk.CTkTextbox(self.scroll, height=120)
+        self._fix_mousewheel(self.custom_cap_text)
+        # Hidden by default
+        self._custom_cap_row = row
+        row += 1
+
+        self._on_captions_toggle()
 
         # ══════════════════════════════════════════════════════════════════
         # STEP 5 — Build
@@ -289,6 +324,7 @@ class ShortsTab(ctk.CTkFrame):
         self.desc_text = ctk.CTkTextbox(self.scroll, height=60)
         self.desc_text.grid(row=row, column=1, padx=10, pady=5, sticky="ew")
         self.desc_text.insert("1.0", "#Shorts")
+        self._fix_mousewheel(self.desc_text)
         row += 1
 
         ctk.CTkLabel(self.scroll, text="Tags:").grid(
@@ -337,6 +373,17 @@ class ShortsTab(ctk.CTkFrame):
     # Helpers
     # ══════════════════════════════════════════════════════════════════════
 
+    def _fix_mousewheel(self, widget):
+        """Fix CustomTkinter Textbox capturing mousewheel and preventing frame scroll."""
+        def _on_mousewheel(event):
+            try:
+                self.scroll._parent_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            except Exception:
+                pass
+            return "break"
+        if hasattr(widget, "_textbox"):
+            widget._textbox.bind("<MouseWheel>", _on_mousewheel)
+
     def _section_header(self, title: str, row: int) -> int:
         """Draw a bold section header and return the next available row."""
         ctk.CTkLabel(
@@ -357,6 +404,17 @@ class ShortsTab(ctk.CTkFrame):
 
     def _on_vol_change(self, value):
         self.vol_label.configure(text=f"{value:.0%}")
+        
+    def _on_captions_toggle(self):
+        if self.captions_var.get():
+            self.cap_source_frame.grid(row=self.cap_source_frame.grid_info().get('row', 0), column=0, columnspan=2, padx=10, pady=2, sticky="w")
+            if self.caption_source_var.get() == "custom":
+                self.custom_cap_text.grid(row=self._custom_cap_row, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
+            else:
+                self.custom_cap_text.grid_forget()
+        else:
+            self.cap_source_frame.grid_forget()
+            self.custom_cap_text.grid_forget()
 
     def _set_status(self, label, text, color="gray"):
         label.configure(text=text, text_color=color)
@@ -451,7 +509,33 @@ class ShortsTab(ctk.CTkFrame):
             self.dl_status, f"✅ Local file selected: {os.path.basename(file_path)}", "#4CAF50"
         )
         self.analyze_btn.configure(state="normal")
+        self.pre_short_cb.configure(state="normal")
         self.url_entry.delete(0, "end")
+
+    def _on_pre_short_toggle(self):
+        is_pre_short = self.pre_short_var.get()
+        if is_pre_short:
+            self.analyze_btn.configure(state="disabled")
+            
+            # Automatically populate start/end with full duration if known
+            duration = self._info.get("duration", 0)
+            self.start_entry.delete(0, "end")
+            self.start_entry.insert(0, "0.0")
+            if duration:
+                self.end_entry.delete(0, "end")
+                self.end_entry.insert(0, f"{float(duration):.1f}")
+                
+            self.preview_text.configure(state="normal")
+            self.preview_text.delete("1.0", "end")
+            self.preview_text.insert("1.0", "(Full short mode active. Run 'Get transcript' below if you want captions, or build directly.)")
+            self.preview_text.configure(state="disabled")
+            self.build_btn.configure(state="normal")
+            
+            # Optionally, we could kick off transcription here silently if they need captions,
+            # but they can also just build.
+        else:
+            self.analyze_btn.configure(state="normal")
+            self.build_btn.configure(state="disabled")
 
     # ══════════════════════════════════════════════════════════════════════
     # Step 2 — Analyze (transcript + highlight)
@@ -658,18 +742,22 @@ class ShortsTab(ctk.CTkFrame):
                     ),
                 )
 
-                # 1. Clip & center-crop to 9:16
+                # 1. Clip & center-crop to 9:16 (skip if Already a Short)
                 clip_out = os.path.join(clips_dir, f"{base}{suffix}.mp4")
-                cmd = clipper.ffmpeg_center_crop_cmd(
-                    self._video_path,
-                    clip_out,
-                    clip_start,
-                    clip_end,
-                    vcfg.get("target_width", 1080),
-                    vcfg.get("target_height", 1920),
-                    vcfg.get("fps", 30),
-                )
-                subprocess.run(cmd, check=True, capture_output=True)
+                if self.pre_short_var.get():
+                    import shutil
+                    shutil.copy2(self._video_path, clip_out)
+                else:
+                    cmd = clipper.ffmpeg_center_crop_cmd(
+                        self._video_path,
+                        clip_out,
+                        clip_start,
+                        clip_end,
+                        vcfg.get("target_width", 1080),
+                        vcfg.get("target_height", 1920),
+                        vcfg.get("fps", 30),
+                    )
+                    subprocess.run(cmd, check=True, capture_output=True)
                 current = clip_out
 
                 # 2. Mix music
@@ -697,7 +785,7 @@ class ShortsTab(ctk.CTkFrame):
 
                 # 3. Burn captions
                 ass_path = None
-                if self.captions_var.get() and self._segments:
+                if self.captions_var.get():
                     self.after(
                         0,
                         lambda i=clip_idx, n=num_clips: self._set_status(
@@ -706,21 +794,39 @@ class ShortsTab(ctk.CTkFrame):
                         ),
                     )
                     ccfg = cfg.get("captions", {})
-                    ass_path = os.path.splitext(current)[0] + ".ass"
-                    captioner.build_ass(
-                        self._segments, clip_start, clip_end, ass_path, ccfg
-                    )
-                    final_out = os.path.join(final_dir, f"{base}{final_suffix}.mp4")
-                    rel_ass = os.path.relpath(ass_path).replace("\\", "/")
-                    rel_ass_esc = rel_ass.replace("'", "'\\''")
-                    sub_cmd = [
-                        "ffmpeg", "-y", "-i", current,
-                        "-vf", f"subtitles='{rel_ass_esc}'",
-                        "-c:a", "copy",
-                        final_out,
-                    ]
-                    subprocess.run(sub_cmd, check=True, capture_output=True)
-                    current = final_out
+                    
+                    caption_segments = []
+                    if self.caption_source_var.get() == "custom":
+                        custom_text = self.custom_cap_text.get("1.0", "end").strip()
+                        if custom_text:
+                            # Try structured parsing
+                            parsed = captioner.parse_structured_script(custom_text, clip_start, clip_end, cfg)
+                            if parsed:
+                                caption_segments = parsed
+                            else:
+                                # Fallback static block
+                                caption_segments = [{"start": clip_start, "end": clip_end, "text": custom_text}]
+                            # Force static style for custom captions (no word-level)
+                            ccfg = {**ccfg, "style": "static"}
+                    else:
+                        caption_segments = self._segments if self._segments else []
+                        
+                    if caption_segments:
+                        ass_path = os.path.splitext(current)[0] + ".ass"
+                        captioner.build_ass(
+                            caption_segments, clip_start, clip_end, ass_path, ccfg
+                        )
+                        final_out = os.path.join(final_dir, f"{base}{final_suffix}.mp4")
+                        rel_ass = os.path.relpath(ass_path).replace("\\", "/")
+                        rel_ass_esc = rel_ass.replace("'", "'\\''")
+                        sub_cmd = [
+                            "ffmpeg", "-y", "-i", current,
+                            "-vf", f"subtitles='{rel_ass_esc}'",
+                            "-c:a", "copy",
+                            final_out,
+                        ]
+                        subprocess.run(sub_cmd, check=True, capture_output=True)
+                        current = final_out
 
                 # Ensure final video is in the final_dir
                 if not current.startswith(final_dir):
@@ -786,22 +892,21 @@ class ShortsTab(ctk.CTkFrame):
                     self.upload_status, "🔑 Authenticating…"
                 ),
             )
-            yt = uploader.get_authenticated_service(cfg)
+            up = get_uploader(cfg)
 
             self.after(
                 0,
                 lambda: self._set_status(self.upload_status, "🚀 Uploading…"),
             )
-            response = uploader.upload(
-                yt,
-                self._final_path,
-                title=title,
-                description=desc,
-                tags=tags,
-                category_id=cfg.get("upload", {}).get("category_id", "22"),
-                privacy_status=privacy,
-                made_for_kids=cfg.get("upload", {}).get("made_for_kids", False),
-            )
+            metadata = {
+                "title": title,
+                "description": desc,
+                "tags": tags,
+                "category_id": cfg.get("upload", {}).get("category_id", "22"),
+                "privacy_status": privacy,
+                "made_for_kids": cfg.get("upload", {}).get("made_for_kids", False),
+            }
+            response = up.upload(self._final_path, metadata)
 
             vid_id = response.get("id", "unknown")
             self.after(

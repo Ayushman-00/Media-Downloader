@@ -227,8 +227,95 @@ def build_ass(
         f.write("\n".join(lines))
         f.write("\n")
 
-    print(f"[captioner] wrote {len(lines)} subtitle lines to {ass_path}", flush=True)
+    print(f"[captioner] Generated {len(clip_segments)} segments in {ass_path}")
     return ass_path
+
+
+def parse_structured_script(raw_text: str, clip_start: float, clip_end: float, cfg: dict) -> list:
+    """Parse a bracketed-timestamp script into caption segments.
+
+    If the text matches the structured format ([MM:SS–MM:SS] blocks with ON-SCREEN lines),
+    sends it to Groq for strict JSON extraction. Falls back to None on failure
+    (caller uses single static block).
+    """
+    import re, json
+    
+    # Check for anything resembling [M:SS] or [MM:SS]
+    if not re.search(r'\[\d+:\d+', raw_text):
+        return None
+        
+    prompt = f'''You are a precise JSON extractor. The user has written a structured video script with timestamped blocks. Extract ONLY the ON-SCREEN caption lines with their timestamps.
+
+Rules:
+1. Parse each [MM:SS–MM:SS] block and find the ON-SCREEN line.
+2. Convert timestamps to seconds (e.g. 1:30 = 90.0).
+3. Return the ON-SCREEN text EXACTLY as written – do NOT paraphrase, summarize, or alter it in any way.
+4. Ignore VO, VISUAL, and any other non-ON-SCREEN lines. Do not include them in output.
+5. If a block has no ON-SCREEN line, skip it entirely.
+
+Respond ONLY with a JSON array of objects. Example:
+[
+  {{"start": 0.0, "end": 6.0, "text": "exact ON-SCREEN text here"}}
+]
+
+Script:
+{raw_text}'''
+
+    try:
+        from src.highlight_engine import _call_groq
+        model = cfg.get('groq', {}).get('llm_model', 'llama-3.3-70b-versatile')
+        raw_response = _call_groq(prompt, model, temperature=0.0)
+        
+        text = raw_response.strip()
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+        
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            # Fallback regex extraction
+            match = re.search(r'\[\s*\{.*?\}\s*\]', text, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group())
+            else:
+                print('[captioner] Structured script parse failed (no JSON array found).')
+                return None
+                
+        if not isinstance(parsed, list):
+            return None
+            
+        clip_duration = clip_end - clip_start
+        valid = []
+        for seg in parsed:
+            if not isinstance(seg, dict) or 'start' not in seg or 'end' not in seg or 'text' not in seg:
+                continue
+            try:
+                s = float(seg['start'])
+                e = float(seg['end'])
+            except (ValueError, TypeError):
+                continue
+                
+            s = max(0, s)
+            e = min(clip_duration, e)
+            if e <= s:
+                continue
+                
+            valid.append({
+                'start': clip_start + s,
+                'end': clip_start + e,
+                'text': str(seg['text'])
+            })
+            
+        if not valid:
+            print('[captioner] Structured script produced zero valid segments.')
+            return None
+            
+        print(f'[captioner] Structured script parsed: {len(valid)} caption segments.')
+        return valid
+        
+    except Exception as e:
+        print(f'[captioner] Structured script parse error: {e}.')
+        return None
 
 
 def _wrap_text(text: str, max_chars: int = 35) -> str:
