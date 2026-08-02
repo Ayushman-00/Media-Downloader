@@ -111,3 +111,9 @@ groq:
 # ------------------------------------
 review:
   enabled: true
+
+# ------------------------------------
+# Script tab settings
+# ------------------------------------
+script:
+  default_mode: full_auto   # full_auto | manual

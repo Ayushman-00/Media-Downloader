@@ -303,12 +303,27 @@ def stage_caption(
         os.path.basename(os.path.splitext(clip_path)[0]) + "_final.mp4",
     )
 
+    # Check for custom caption text from the Script tab / job override
+    log = read_log(job_path, cfg)
+    hl_entry = log.get("stages", {}).get("highlight", {})
+    custom_caption_text = hl_entry.get("custom_caption_text", "")
+
     if not ccfg.get("enabled", True):
-        # We still need to encode music if captions are disabled but music is present
-        # but for simplicity we rely on the same single pass without subtitles
         ass_path = None
+    elif custom_caption_text:
+        # Custom text — route through static fallback (no word-level data)
+        ass_path = os.path.splitext(clip_path)[0] + ".ass"
+        hook_line = highlight.get("hook_line", "")
+        custom_segments = [{"start": highlight["start"], "end": highlight["end"], "text": custom_caption_text}]
+        static_ccfg = {**ccfg, "style": "static"}
+        captioner.build_ass(
+            custom_segments,
+            highlight["start"], highlight["end"],
+            ass_path, static_ccfg,
+            hook_line=hook_line
+        )
     else:
-        # Build .ass file
+        # Build .ass file from transcript segments
         ass_path = os.path.splitext(clip_path)[0] + ".ass"
         hook_line = highlight.get("hook_line", "")
         captioner.build_ass(

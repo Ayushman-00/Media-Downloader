@@ -192,7 +192,6 @@ class ShortsTab(ctk.CTkFrame):
         self.preview_text.grid(
             row=row, column=0, columnspan=2, padx=10, pady=5, sticky="ew"
         )
-        self._fix_mousewheel(self.preview_text)
         row += 1
 
         # ══════════════════════════════════════════════════════════════════
@@ -255,9 +254,8 @@ class ShortsTab(ctk.CTkFrame):
         self.cap_source_frame.grid(row=row, column=0, columnspan=2, padx=10, pady=2, sticky="w")
         row += 1
         
-        # Custom Caption Textbox
+        # Custom Caption Textbox — editable, so DO NOT redirect its scroll
         self.custom_cap_text = ctk.CTkTextbox(self.scroll, height=120)
-        self._fix_mousewheel(self.custom_cap_text)
         # Hidden by default
         self._custom_cap_row = row
         row += 1
@@ -373,16 +371,7 @@ class ShortsTab(ctk.CTkFrame):
     # Helpers
     # ══════════════════════════════════════════════════════════════════════
 
-    def _fix_mousewheel(self, widget):
-        """Fix CustomTkinter Textbox capturing mousewheel and preventing frame scroll."""
-        def _on_mousewheel(event):
-            try:
-                self.scroll._parent_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-            except Exception:
-                pass
-            return "break"
-        if hasattr(widget, "_textbox"):
-            widget._textbox.bind("<MouseWheel>", _on_mousewheel)
+
 
     def _section_header(self, title: str, row: int) -> int:
         """Draw a bold section header and return the next available row."""
@@ -500,7 +489,15 @@ class ShortsTab(ctk.CTkFrame):
 
         self._video_path = file_path
         self._video_url = ""  # No URL
-        self._info = {"title": os.path.basename(file_path)}
+        
+        # Get actual duration for the local file
+        from src.music_selector import get_duration
+        dur = get_duration(file_path)
+        
+        self._info = {
+            "title": os.path.basename(file_path),
+            "duration": dur
+        }
         self._segments = None
         self._highlight = None
         self._final_path = None
@@ -707,11 +704,19 @@ class ShortsTab(ctk.CTkFrame):
             highlights_to_build = []
             if num_clips == 1:
                 # Single clip uses the user-edited start/end times
-                try:
-                    clip_start = float(self.start_entry.get())
-                    clip_end = float(self.end_entry.get())
-                except ValueError:
-                    raise ValueError("Enter valid start / end times")
+                if self.pre_short_var.get():
+                    clip_start = 0.0
+                    clip_end = self._info.get("duration", 0.0)
+                    if not clip_end:
+                        from src.music_selector import get_duration
+                        clip_end = get_duration(self._video_path) or 1.0
+                else:
+                    try:
+                        clip_start = float(self.start_entry.get())
+                        clip_end = float(self.end_entry.get())
+                    except ValueError:
+                        raise ValueError("Enter valid start / end times")
+                
                 if clip_end <= clip_start:
                     raise ValueError("End time must be after start time")
                 highlights_to_build = [{"start": clip_start, "end": clip_end}]
