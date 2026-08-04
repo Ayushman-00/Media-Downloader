@@ -382,6 +382,12 @@ class ShortsTab(ctk.CTkFrame):
         ).grid(row=row, column=0, columnspan=2, sticky="w", padx=5, pady=(20, 5))
         return row + 1
 
+    def _fix_mousewheel(self, widget):
+        """Prevent a CTkTextbox from swallowing scroll events meant for the parent frame."""
+        def _on_mousewheel(event):
+            self.scroll._parent_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        widget.bind("<MouseWheel>", _on_mousewheel, add="+")
+
     def _refresh_tracks(self):
         """Populate the music track dropdown from the /music folder."""
         music_dir = self._cfg.get("paths", {}).get("music", "")

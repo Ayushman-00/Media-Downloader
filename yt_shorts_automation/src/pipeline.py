@@ -152,6 +152,7 @@ def stage_highlight(
 
     engine = hcfg.get("engine", "heuristic_only")
     best = None
+    all_candidates_for_log = []
     
     if engine == "propose_refine_judge":
         cached = log.get("decisions", {}).get("highlight", {})
@@ -166,9 +167,25 @@ def stage_highlight(
                 candidates = highlight_engine.run_engine(video_path, segments, cfg)
                 best = candidates[0]
                 
+                # Log all candidates with their per-dimension scores
+                all_candidates_for_log = [
+                    {
+                        "start": c["start"],
+                        "end": c["end"],
+                        "virality_score": c.get("virality_score", 0),
+                        "scores": c.get("scores", {}),
+                        "heuristic_scores": c.get("heuristic_scores", {}),
+                        "llm_scores": c.get("llm_scores", {}),
+                        "hook_line": c.get("hook_line", ""),
+                        "hook_type": c.get("hook_type", ""),
+                        "judge_rationale": c.get("judge_rationale", ""),
+                    }
+                    for c in candidates
+                ]
+                
                 log["decisions"]["highlight"] = {
                     "method": "propose_refine_judge",
-                    "candidates": candidates
+                    "candidates": all_candidates_for_log,
                 }
                 write_log(job_path, cfg, log)
                 best["reason"] = "propose_refine_judge"
@@ -192,8 +209,19 @@ def stage_highlight(
             mark_stage(job_path, cfg, "highlight", "fallback", extra=best)
             return best
 
-        ranked = highlight_finder.score_heuristic(video_path, windows)
+        ranked = highlight_finder.score_heuristic(video_path, windows, cfg)
         best = {**ranked[0], "reason": "heuristic"}
+
+        # Log top candidates with per-dimension scores
+        all_candidates_for_log = [
+            {
+                "start": r["start"],
+                "end": r["end"],
+                "virality_score": r.get("virality_score", r.get("score", 0)),
+                "scores": r.get("scores", {}),
+            }
+            for r in ranked[:hcfg.get("top_candidates", 5)]
+        ]
 
         # Cloud LLM re-ranking
         if hcfg.get("use_groq") and hcfg["method"] in ("groq", "hybrid"):
@@ -213,7 +241,10 @@ def stage_highlight(
                 print(f"[pipeline] Ollama scoring failed, using heuristic: {e}", flush=True)
                 
         if "highlight" not in log["decisions"] or log["decisions"]["highlight"].get("method") == "fallback_after_failure":
-            log["decisions"]["highlight"] = {"method": best.get("reason", "heuristic")}
+            log["decisions"]["highlight"] = {
+                "method": best.get("reason", "heuristic"),
+                "candidates": all_candidates_for_log,
+            }
             write_log(job_path, cfg, log)
 
     if cfg.get("review", {}).get("enabled", False):
@@ -223,9 +254,17 @@ def stage_highlight(
         mark_stage(job_path, cfg, "highlight", "pending_review")
         return None
 
-    clean_best = {"start": best["start"], "end": best["end"], "reason": best.get("reason", "heuristic")}
+    clean_best = {
+        "start": best["start"],
+        "end": best["end"],
+        "reason": best.get("reason", "heuristic"),
+    }
     if "hook_line" in best:
         clean_best["hook_line"] = best["hook_line"]
+    if "virality_score" in best:
+        clean_best["virality_score"] = best["virality_score"]
+    if "scores" in best:
+        clean_best["scores"] = best["scores"]
         
     mark_stage(job_path, cfg, "highlight", "scored", extra=clean_best)
     return best

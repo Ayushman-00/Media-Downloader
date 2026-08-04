@@ -3,18 +3,30 @@ Multi-phase highlight engine for yt_shorts_automation.
 
 Phase A: Propose candidates via LLM (chunked for long videos).
 Phase B: Refine boundaries (snap to word gaps or segment boundaries).
-Phase C: Judge & diversify (score using LLM signal + heuristic sanity check).
+Phase C: Judge & diversify (LLM structured scoring + heuristic blend).
+
+Phase C uses Opus Clips-style multi-dimensional scoring:
+  5 dimensions (hook, flow, engagement, value, trend) each 0-100,
+  blended between LLM judge and heuristic sanity-check scores.
 """
 
 import json
 import os
 import re
+import time
 import urllib.request
 import urllib.error
 from typing import Dict, List, Optional
 
 from src.utils import load_config
-from src.highlight_finder import score_heuristic
+from src.highlight_finder import (
+    score_heuristic,
+    compute_virality_score,
+    blend_scores,
+    _get_scoring_config,
+    _parse_dimension_scores,
+    DEFAULT_WEIGHTS,
+)
 
 PROPOSE_PROMPT = """You are an expert short-form video editor. Your task is to find the most viral, engaging moments in the provided transcript and propose them as short-form video clips (YouTube Shorts / TikTok).
 
@@ -23,6 +35,13 @@ Guidelines:
 2. Boundaries should land on natural sentence or pause boundaries visible in the transcript.
 3. The opening line MUST work as a strong, standalone hook to grab attention immediately.
 4. Aim for clip durations between 20s and 60s.
+
+For each candidate, also provide a quick self-assessment on these virality dimensions (0-100):
+- hook: How attention-grabbing is the opening line?
+- flow: Does the clip have a complete narrative arc?
+- engagement: Emotional peaks, conflict, humor, surprise?
+- value: Actionable tips, insights, quotable lines?
+- trend: Topic relevance, shareability, platform fit?
 
 Propose up to {max_candidates} candidates.
 Respond ONLY with a JSON array of objects. Example:
@@ -34,12 +53,53 @@ Respond ONLY with a JSON array of objects. Example:
     "hook_type": "question|bold_claim|contrarian|story_open|stat",
     "payoff_type": "insight|punchline|reveal|actionable_tip|emotional_beat",
     "rationale": "One sentence explaining why this clip is highly engaging.",
-    "self_contained": true
+    "self_contained": true,
+    "self_scores": {{"hook": 85, "flow": 75, "engagement": 80, "value": 70, "trend": 65}}
   }}
 ]
 
 Transcript:
 {transcript}
+"""
+
+JUDGE_PROMPT = """You are an expert viral content analyst. Score each candidate video clip on these 5 virality dimensions (each 0-100).
+
+**Scoring Rubric:**
+- **hook** (0-100): How strong is the opening line as a standalone attention-grabber?
+  90-100: Irresistible curiosity gap or bold statement that demands attention
+  70-89: Strong opener that creates clear interest
+  50-69: Decent opener but not immediately compelling
+  0-49: Weak or generic opening
+
+- **flow** (0-100): Does the clip have a clear beginning, middle, and end?
+  90-100: Perfect narrative arc, completely self-contained
+  70-89: Good structure, minor rough edges
+  50-69: Somewhat complete but feels cut short or starts abruptly
+  0-49: Feels like a random excerpt, no clear arc
+
+- **engagement** (0-100): Emotional peaks, conflict, humor, surprise, strong opinions?
+  90-100: Multiple strong emotional moments, highly compelling
+  70-89: Clear emotional content that drives reaction
+  50-69: Some interesting moments but mostly flat
+  0-49: Monotone, no emotional peaks
+
+- **value** (0-100): Actionable tips, insights, quotable lines, educational substance?
+  90-100: Highly actionable, memorable takeaway
+  70-89: Solid insight or useful information
+  50-69: Some value but not particularly memorable
+  0-49: No clear takeaway
+
+- **trend** (0-100): Topic relevance, shareability, platform fit for YouTube Shorts / TikTok?
+  90-100: Highly shareable, perfect for short-form, trending topic
+  70-89: Good platform fit, likely to get engagement
+  50-69: Adequate for short-form but not exceptional
+  0-49: Poor fit for short-form or niche/dated topic
+
+Candidates:
+{candidates}
+
+Respond ONLY with a JSON array of objects, one per candidate:
+[{{"index": 0, "hook": 85, "flow": 72, "engagement": 80, "value": 65, "trend": 70, "rationale": "Strong opening question creates curiosity gap..."}}]
 """
 
 
@@ -74,6 +134,15 @@ def _parse_candidate_list(raw: str) -> List[Dict]:
             try:
                 c["start"] = float(c["start"])
                 c["end"] = float(c["end"])
+
+                # Parse self_scores if present (from updated Phase A prompt)
+                if "self_scores" in c and isinstance(c["self_scores"], dict):
+                    for dim in DEFAULT_WEIGHTS:
+                        try:
+                            c["self_scores"][dim] = max(0, min(100, int(c["self_scores"].get(dim, 50))))
+                        except (ValueError, TypeError):
+                            c["self_scores"][dim] = 50
+
                 valid_candidates.append(c)
             except (ValueError, TypeError):
                 continue
@@ -133,7 +202,6 @@ def _call_groq(prompt: str, model: str, temperature: float = 0.2) -> str:
 # --- Phase A: Propose ---
 def propose_candidates(segments: List[Dict], cfg: dict) -> List[Dict]:
     """Phase A: Chunk transcript, propose candidates via LLM, dedupe."""
-    import time
     hcfg = cfg.get("highlight", {})
     max_cands = hcfg.get("max_candidates", 10)
     
@@ -252,59 +320,117 @@ def refine_boundaries(candidates: List[Dict], segments: List[Dict]) -> List[Dict
     return refined
 
 
-# --- Phase C: Judge & diversify ---
+# --- Phase C: Judge & diversify (Opus Clips-style multi-dimensional scoring) ---
 def judge_and_diversify(candidates: List[Dict], video_path: str, cfg: dict) -> List[Dict]:
-    """Phase C: Score candidates using heuristic + LLM signal, and select top-K."""
+    """Phase C: Score candidates using LLM structured judge + heuristic blend.
+
+    Scoring pipeline:
+    1. Run heuristic scorer on all candidates → per-dimension scores
+    2. Call LLM judge for structured per-dimension scoring
+    3. Blend LLM + heuristic scores (configurable ratio, default 60/40)
+    4. Compute composite virality score
+    5. Greedy diversify selection (min time separation)
+    """
     hcfg = cfg.get("highlight", {})
+    scoring_cfg = _get_scoring_config(cfg)
+    weights = scoring_cfg["weights"]
+    llm_weight = scoring_cfg["llm_weight"]
     min_separation = hcfg.get("min_candidate_separation_sec", 20)
     top_k = hcfg.get("top_candidates", 5)
     
-    # 1. Run heuristic score as a sanity check
-    # Convert candidates to 'windows' format for heuristic function
+    # 1. Run heuristic score on all candidates
     windows = []
     for c in candidates:
         windows.append({
             "start": c["start"],
             "end": c["end"],
-            "text": c.get("hook_line", "") # Only needed for hook/question bonus
+            "text": c.get("hook_line", "") + " " + c.get("rationale", ""),
+            "segments": c.get("segments", []),
         })
         
-    scored_heuristics = score_heuristic(video_path, windows)
+    scored_heuristics = score_heuristic(video_path, windows, cfg)
     
-    # 2. Combine scores
+    # Map heuristic scores by start time
+    heuristic_map = {}
+    for sh in scored_heuristics:
+        heuristic_map[round(sh["start"], 1)] = sh.get("scores", {})
+
+    # 2. Call LLM judge for structured scoring
+    llm_dim_scores = {}
+    model = cfg.get("groq", {}).get("llm_model", "llama-3.3-70b-versatile")
+    
+    try:
+        # Build candidate descriptions for the judge
+        candidates_text = ""
+        for i, c in enumerate(candidates):
+            hook = c.get("hook_line", "")
+            text_preview = c.get("rationale", "")
+            candidates_text += (
+                f"\n[{i}] {c['start']:.1f}s–{c['end']:.1f}s\n"
+                f"  Hook: \"{hook}\"\n"
+                f"  Context: {text_preview}\n"
+                f"  Hook type: {c.get('hook_type', 'unknown')}\n"
+                f"  Payoff: {c.get('payoff_type', 'unknown')}\n"
+            )
+
+        judge_prompt = JUDGE_PROMPT.format(candidates=candidates_text)
+
+        start_t = time.time()
+        raw_response = _call_groq(judge_prompt, model, temperature=0.0)
+        judge_latency = time.time() - start_t
+
+        dim_results = _parse_dimension_scores(raw_response, max_idx=len(candidates) - 1)
+        for ds in dim_results:
+            idx = ds["index"]
+            llm_dim_scores[idx] = {
+                dim: ds.get(dim, 50) for dim in DEFAULT_WEIGHTS
+            }
+            llm_dim_scores[idx]["rationale"] = ds.get("rationale", "")
+            llm_dim_scores[idx]["_judge_latency"] = judge_latency
+
+        print(f"[highlight_engine] Phase C: LLM judged {len(dim_results)} candidates in {judge_latency:.1f}s", flush=True)
+    except Exception as e:
+        print(f"[highlight_engine] Phase C: LLM judge failed ({e}), using heuristic-only scoring", flush=True)
+        llm_weight = 0.0  # Fall back to pure heuristic
+
+    # 3. Blend scores and compute composite
     judged = []
     for i, c in enumerate(candidates):
-        # Find its heuristic score
-        h_score = 0.0
-        for sh in scored_heuristics:
-            if abs(sh["start"] - c["start"]) < 0.1:
-                h_score = sh["score"]
-                break
-                
-        # LLM signal is inherent since the LLM proposed it.
-        # We could prompt the LLM again to judge, but for determinism (temp=0) 
-        # and efficiency, we will blend the heuristic score with its order of proposal.
-        # The earlier it was proposed (or the better its hook_type), the higher its intrinsic LLM score.
+        # Get heuristic scores for this candidate
+        h_scores = heuristic_map.get(round(c["start"], 1), {
+            "hook": 50, "flow": 50, "engagement": 50, "value": 50, "trend": 50
+        })
         
-        # Simple blend: heuristic score + bonus for being self_contained + bonus for hook type
-        llm_bonus = 0
-        if c.get("self_contained"):
-            llm_bonus += 10
-        if c.get("hook_type") in ["question", "bold_claim", "contrarian", "story_open"]:
-            llm_bonus += 15
-            
-        final_score = h_score + llm_bonus
+        # Get LLM scores (or fall back to self_scores from Phase A, or defaults)
+        if i in llm_dim_scores:
+            l_scores = {dim: llm_dim_scores[i].get(dim, 50) for dim in DEFAULT_WEIGHTS}
+        elif "self_scores" in c and isinstance(c["self_scores"], dict):
+            l_scores = {dim: c["self_scores"].get(dim, 50) for dim in DEFAULT_WEIGHTS}
+        else:
+            l_scores = {dim: 50 for dim in DEFAULT_WEIGHTS}
+        
+        # Blend
+        virality, blended = blend_scores(h_scores, l_scores, llm_weight, weights)
         
         j = c.copy()
-        j["heuristic_score"] = h_score
-        j["llm_bonus"] = llm_bonus
-        j["final_score"] = final_score
+        j["scores"] = blended
+        j["heuristic_scores"] = h_scores
+        j["llm_scores"] = l_scores
+        j["virality_score"] = virality
+        j["final_score"] = virality  # backward compat
+        j["score"] = virality  # backward compat
+        
+        # Include LLM rationale if available
+        if i in llm_dim_scores:
+            j["judge_rationale"] = llm_dim_scores[i].get("rationale", "")
+            j["_judge_latency"] = llm_dim_scores[i].get("_judge_latency", 0)
+        
         judged.append(j)
         
-    # Sort by final score
-    judged.sort(key=lambda x: x["final_score"], reverse=True)
+    # Sort by virality score
+    judged.sort(key=lambda x: x["virality_score"], reverse=True)
     
-    # 3. Diversify (respect min_candidate_separation_sec)
+    # 4. Diversify (respect min_candidate_separation_sec)
     selected = []
     for j in judged:
         if len(selected) >= top_k:
@@ -321,7 +447,18 @@ def judge_and_diversify(candidates: List[Dict], video_path: str, cfg: dict) -> L
                 
         if not too_close:
             selected.append(j)
-            
+
+    # Log summary
+    for rank, s in enumerate(selected):
+        dims = s.get("scores", {})
+        print(
+            f"[highlight_engine]   #{rank+1}: {s['start']:.1f}s-{s['end']:.1f}s "
+            f"VS={s['virality_score']} "
+            f"[H:{dims.get('hook',0)} F:{dims.get('flow',0)} "
+            f"E:{dims.get('engagement',0)} V:{dims.get('value',0)} T:{dims.get('trend',0)}]",
+            flush=True,
+        )
+
     return selected
 
 
@@ -335,7 +472,7 @@ def run_engine(video_path: str, segments: List[Dict], cfg: dict) -> List[Dict]:
     print(f"[highlight_engine] Starting Phase B (Refine) on {len(candidates)} candidates...", flush=True)
     refined = refine_boundaries(candidates, segments)
     
-    print(f"[highlight_engine] Starting Phase C (Judge) on {len(refined)} candidates...", flush=True)
+    print(f"[highlight_engine] Starting Phase C (Judge & Diversify) on {len(refined)} candidates...", flush=True)
     final_candidates = judge_and_diversify(refined, video_path, cfg)
     
     if not final_candidates:

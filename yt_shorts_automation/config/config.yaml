@@ -58,6 +58,16 @@ highlight:
   use_ollama: false
   ollama_url: "http://localhost:11434"
   ollama_model: "llama3"
+  # Opus Clips-style multi-dimensional virality scoring weights
+  # Each dimension scored 0-100, weighted into composite Virality Score (0-100)
+  scoring:
+    weights:
+      hook: 0.30        # Opening attention-grabber strength
+      flow: 0.20        # Narrative completeness (beginning/middle/end)
+      engagement: 0.20  # Emotional peaks, conflict, surprise
+      value: 0.15       # Actionable tips, insights, quotable lines
+      trend: 0.15       # Topic relevance, shareability, platform fit
+    llm_weight: 0.60    # LLM vs heuristic blend (0.0 = pure heuristic, 1.0 = pure LLM)
 
 # ------------------------------------
 # Video settings
