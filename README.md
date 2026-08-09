@@ -4,7 +4,7 @@
 
 **An all-in-one desktop suite and AI-powered pipeline for downloading media from 1000+ sites and converting long videos into vertical YouTube Shorts.**
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6?logo=windows)](https://github.com/Ayushman-00/Media-Downloader)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6?logo=windows)](https://github.com/Ayushman-00/Shorts-Automation-Pipeline)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Framework](https://img.shields.io/badge/GUI-CustomTkinter-blue)](https://github.com/TomSchimansky/CustomTkinter)
@@ -62,7 +62,7 @@
 ## 📁 Project Structure
 
 ```
-Media-Downloader/
+Shorts-Automation-Pipeline/
 ├── main.py                        # Desktop application entry point (CustomTkinter)
 ├── requirements.txt               # Main application dependencies
 ├── settings.json                  # Application settings (theme, paths, concurrency)
@@ -128,8 +128,8 @@ Media-Downloader/
 
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/Ayushman-00/Media-Downloader.git
-   cd Media-Downloader
+   git clone https://github.com/Ayushman-00/Shorts-Automation-Pipeline.git
+   cd Shorts-Automation-Pipeline
    ```
 
 2. **Create a Virtual Environment**:
@@ -312,7 +312,7 @@ Distributed under the **MIT License**. See `LICENSE` for details.
 
 **Built with Python • CustomTkinter • Streamlit • yt-dlp • FFmpeg • Groq • Whisper**
 
-[⭐ Star on GitHub](https://github.com/Ayushman-00/Media-Downloader)
+[⭐ Star on GitHub](https://github.com/Ayushman-00/Shorts-Automation-Pipeline)
 
 </div>
 
