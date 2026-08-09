@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎬 Media Downloader & YT Shorts Automation Suite
+# 🎬 Shorts Automation Pipeline
 
 **An all-in-one desktop suite and AI-powered pipeline for downloading media from 1000+ sites and converting long videos into vertical YouTube Shorts.**
 
